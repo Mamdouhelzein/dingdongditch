@@ -35,7 +35,7 @@ def test_rejects_non_nmap_xml(tmp_path):
         parse_nmap_xml(bad)
 
 
-def test_cli_scan_json():
-    result = CliRunner().invoke(app, ["scan", str(SAMPLE), "--json"])
+def test_cli_analyze_json():
+    result = CliRunner().invoke(app, ["analyze", str(SAMPLE), "--json"])
     assert result.exit_code == 0
     assert '"product": "vsftpd"' in result.output

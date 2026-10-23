@@ -1,6 +1,6 @@
 # portrisk
 
-> ML-powered risk scoring for open ports. Feed it an `nmap -sV` scan; it tells you which services are most likely to get you hacked, why, and how to fix them.
+> ML-powered risk scoring for open ports. Point it at a host: it scans with nmap, then tells you which services are most likely to get you hacked, why, and how to fix them.
 
 ![status](https://img.shields.io/badge/status-early%20development-orange)
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
@@ -13,34 +13,51 @@ Knowing a service has CVEs is easy: it's a database lookup. The hard part is **p
 `portrisk` trains a model on historical CVE data, labeled by whether each CVE was actually exploited (CISA KEV, Exploit-DB), to predict **exploit likelihood**, then rolls those predictions up into a risk score for every open port.
 
 ```
-nmap -sV  →  services + versions  →  matching CVEs  →  ML exploit-likelihood per CVE
+scan (nmap -sV)  →  services + versions  →  matching CVEs  →  ML exploit-likelihood per CVE
           →  risk score per port   →  explanation + hardening advice
 ```
 
 ## Quick start
+
+Requires Python 3.10+ and [nmap](https://nmap.org/download.html) (`brew install nmap` / `sudo apt install nmap`).
 
 ```bash
 git clone https://github.com/Mamdouhelzein/portrisk.git
 cd portrisk
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
+```
 
-nmap -sV -oX scan.xml 192.168.56.101      # scan a machine you own / a lab VM
-portrisk scan scan.xml
-portrisk scan scan.xml --json
-nmap -sV -oX - 192.168.56.101 | portrisk scan -
+**Scan and analyze in one step** (only machines you own or a lab VM):
+
+```bash
+portrisk scan 192.168.56.101                  # top 1000 ports
+portrisk scan 192.168.56.101 -P quick         # top 100 ports, faster
+portrisk scan 192.168.56.101 -P full          # all 65,535 ports, slow
+portrisk scan 192.168.56.101 -p 21,22,80      # specific ports
+portrisk scan 192.168.56.101 -o scan.xml      # also save the raw nmap XML
+portrisk scan 192.168.56.101 --json           # machine-readable output
+```
+
+**Already have an nmap report?**
+
+```bash
+portrisk analyze scan.xml
+nmap -sV -oX - 192.168.56.101 | portrisk analyze -
 ```
 
 ## Roadmap
 
 - [x] Project setup, CLI skeleton, CI
 - [x] Parse nmap XML (ports, products, versions, CPEs)
+- [x] Built-in scanning: `portrisk scan <target>` runs nmap -sV for you
 - [ ] **Phase 1:** collect data: NVD CVEs, CISA KEV, Exploit-DB, EPSS (`portrisk update-db`)
 - [ ] **Phase 2–3:** labels + feature engineering (CVSS vector, CWE, description text)
 - [ ] **Phase 4:** train & evaluate (time-based split, PR-AUC, vs. CVSS-only baseline and EPSS)
 - [ ] **Phase 6:** match services to CVEs (CPE + version ranges, fuzzy fallback)
 - [ ] **Phase 7:** per-port risk score + exposure rules (telnet, SMB, RDP, DBs...)
 - [ ] **Phase 8:** explanations (SHAP) and hardening advice
+- [ ] Fallback pure-Python scanner (TCP connect + banner grabbing) for when nmap isn't installed
 - [ ] Publish to PyPI (`pip install portrisk`)
 
 ## Project layout
@@ -48,6 +65,7 @@ nmap -sV -oX - 192.168.56.101 | portrisk scan -
 ```
 src/portrisk/
   cli.py          # `portrisk` command
+  scanner.py      # runs nmap -sV
   nmap_parser.py  # nmap XML → services
   collect.py      # download CVE / exploit data
   features.py     # CVE → features

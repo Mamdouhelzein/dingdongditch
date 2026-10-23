@@ -52,6 +52,7 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
+ignore = ["B008"]  # typer.Option() defaults are the normal Typer style
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
