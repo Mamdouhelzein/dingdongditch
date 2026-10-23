@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.env
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.DS_Store
+.vscode/
+.idea/
+
+# Data & models (large; regenerate with `portrisk update-db` / training scripts)
+data/raw/*
+data/processed/*
+!data/**/.gitkeep
+models/*.joblib
+models/*.json
+!models/.gitkeep
+
+# Never commit real scan results of other people's networks
+scans/
+*.nmap
+*.gnmap
