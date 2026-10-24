@@ -16,7 +16,7 @@ venv/
 .vscode/
 .idea/
 
-# Data & models (large; regenerate with `portrisk update-db` / training scripts)
+# Data & models (large; regenerate with `dingdongditch update-db` / training scripts)
 data/raw/*
 data/processed/*
 !data/**/.gitkeep

@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from portrisk import scanner
-from portrisk.cli import app
+from dingdongditch import nmap_scanner as scanner
+from dingdongditch.cli import app
 
 SAMPLE = Path(__file__).parent / "fixtures" / "sample_scan.xml"
 

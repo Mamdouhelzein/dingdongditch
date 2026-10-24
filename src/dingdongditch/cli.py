@@ -1,4 +1,4 @@
-"""portrisk command-line interface."""
+"""dingdongditch command-line interface."""
 
 from __future__ import annotations
 
@@ -11,9 +11,9 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from portrisk import __version__
-from portrisk.nmap_parser import Service, parse_nmap_xml
-from portrisk.scanner import PROFILES, NmapNotFoundError, run_scan
+from dingdongditch import __version__
+from dingdongditch.nmap_parser import Service, parse_nmap_xml
+from dingdongditch.nmap_scanner import PROFILES, NmapNotFoundError, run_scan
 
 app = typer.Typer(
     help="Scan a host and score the risk of its open ports.",
@@ -26,7 +26,7 @@ err = Console(stderr=True)
 
 def _version_callback(value: bool) -> None:
     if value:
-        console.print(f"portrisk {__version__}")
+        console.print(f"DingDongDitch {__version__}")
         raise typer.Exit()
 
 
@@ -37,7 +37,7 @@ def main(
         help="Show the version and exit.",
     ),
 ) -> None:
-    """portrisk: ML-powered risk scoring for open ports."""
+    """DingDongDitch: ML-powered risk scoring for open ports."""
 
 
 def _report(services: list[Service], as_json: bool) -> None:

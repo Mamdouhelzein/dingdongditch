@@ -7,7 +7,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from portrisk.nmap_parser import Service, parse_nmap_xml
+from dingdongditch.nmap_parser import Service, parse_nmap_xml
 
 # Scan profiles: how much of the network to look at, and how hard.
 PROFILES: dict[str, list[str]] = {

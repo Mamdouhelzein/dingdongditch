@@ -3,8 +3,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from portrisk.cli import app
-from portrisk.nmap_parser import parse_nmap_xml
+from dingdongditch.cli import app
+from dingdongditch.nmap_parser import parse_nmap_xml
 
 SAMPLE = Path(__file__).parent / "fixtures" / "sample_scan.xml"
 
