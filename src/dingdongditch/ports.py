@@ -21,14 +21,24 @@ SERVICE_NAMES: dict[int, str] = {
     8180: "http", 8443: "https-alt", 8888: "http", 9000: "http", 9090: "http",
     9092: "kafka", 9100: "jetdirect", 9200: "elasticsearch", 9418: "git",
     11211: "memcached", 27017: "mongodb", 50000: "http",
+    # Web apps, admin panels and middleware that show up in Vulhub-style labs.
+    2222: "ssh-alt", 2379: "etcd", 3690: "svn", 4848: "glassfish", 5005: "jdwp",
+    5985: "wsman", 5986: "wsmans", 7474: "neo4j", 8086: "influxdb", 8088: "http",
+    8090: "http", 8161: "activemq-web", 8500: "consul", 8983: "solr", 9001: "http",
+    9443: "https-alt", 9990: "jboss-mgmt", 10000: "webmin", 15672: "rabbitmq-mgmt",
+    50070: "hadoop-namenode", 61616: "activemq",
 }
+
+# Usually UDP, so a TCP connect scan normally won't see them. Kept for the
+# rare TCP listener and for a future UDP scan.
+MOSTLY_UDP: set[int] = {69, 161, 5060}
 
 # A hand-picked "most interesting" set: common services plus the risky ones
 # attackers look for (databases, remote admin, legacy cleartext protocols).
 TOP_PORTS: list[int] = sorted(SERVICE_NAMES)
 
 # Ports where the service is usually TLS from the first byte.
-TLS_PORTS: set[int] = {443, 465, 636, 990, 993, 995, 2376, 6443, 8443}
+TLS_PORTS: set[int] = {443, 465, 636, 990, 993, 995, 2376, 5986, 6443, 8443, 9443}
 
 PROFILES: dict[str, list[int]] = {
     "quick": TOP_PORTS,

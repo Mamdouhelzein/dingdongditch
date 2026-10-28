@@ -1,6 +1,13 @@
 import pytest
 
-from dingdongditch.ports import PROFILES, SERVICE_NAMES, TLS_PORTS, TOP_PORTS, parse_ports
+from dingdongditch.ports import (
+    MOSTLY_UDP,
+    PROFILES,
+    SERVICE_NAMES,
+    TLS_PORTS,
+    TOP_PORTS,
+    parse_ports,
+)
 
 
 def test_parse_single_ports_and_ranges():
@@ -32,5 +39,6 @@ def test_profiles_are_sorted_and_nested():
 def test_known_ports_have_names():
     assert TOP_PORTS == sorted(SERVICE_NAMES)
     assert TLS_PORTS <= set(SERVICE_NAMES)
+    assert MOSTLY_UDP <= set(SERVICE_NAMES)
     assert SERVICE_NAMES[22] == "ssh"
     assert SERVICE_NAMES[6379] == "redis"
