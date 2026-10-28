@@ -4,7 +4,7 @@ Tick a box (`[x]`) when a step is done and committed.
 
 ## Core scanner
 - [x] 1. Port lists and profiles (`ports.py`) + tests
-- [ ] 2. Port finder (`connect_scan.py`): async TCP connect scan, concurrency limit, timeouts
+- [x] 2. Port finder (`connect_scan.py`): async TCP connect scan, concurrency limit, timeouts
 - [ ] 3. Banner grabbing + probes (`probes.py`): listen first, then send safe probes, TLS on TLS ports
 - [ ] 4. Fingerprints (`fingerprints.py`): banner → product / version / CPE (~25 common services)
 - [ ] 5. CLI: `--engine own|nmap` (default `own`) and `--no-chill` flag
@@ -26,7 +26,7 @@ Tick a box (`[x]`) when a step is done and committed.
 ## Wrap up Part 1
 - [ ] 16. Test against Vulhub labs on Kali
 - [ ] 17. Update README (own scanner is default, nmap is backup)
-- [ ] 18. Push to GitHub (create empty repo `Mamdouhelzein/DingDongDitch` first)
+- [ ] 18. Push to GitHub
 
 ## Later bonus
 - [ ] SYN scan (needs root)
