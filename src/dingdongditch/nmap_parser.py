@@ -19,6 +19,7 @@ class Service:
     version: str = ""
     extrainfo: str = ""
     cpes: list[str] = field(default_factory=list)
+    banner: str = ""  # raw text the service sent (own engine only), control chars escaped
 
     @property
     def label(self) -> str:
