@@ -6,7 +6,7 @@ Tick a box (`[x]`) when a step is done and committed.
 - [x] 1. Port lists and profiles (`ports.py`) + tests
 - [x] 2. Port finder (`connect_scan.py`): async TCP connect scan, concurrency limit, timeouts
 - [x] 3. Banner grabbing + probes (`probes.py`): listen first, then send safe probes, TLS on TLS ports
-- [ ] 4. Fingerprints (`fingerprints.py`): banner → product / version / CPE (~25 common services)
+- [x] 4. Fingerprints (`fingerprints.py`): banner → product / version / CPE (~25 common services)
 - [ ] 5. CLI: `--engine own|nmap` (default `own`) and `--no-chill` flag
 - [ ] 6. Tests with fake local servers (no network needed, works in CI)
 
