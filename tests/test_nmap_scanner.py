@@ -52,12 +52,30 @@ def test_run_scan_parses_output(fake_nmap, tmp_path):
 
 
 def test_cli_scan(fake_nmap):
-    result = CliRunner().invoke(app, ["scan", "192.168.56.101", "--json"])
+    result = CliRunner().invoke(app, ["scan", "192.168.56.101", "--engine", "nmap", "--json"])
     assert result.exit_code == 0
     assert '"product": "vsftpd"' in result.output
 
 
 def test_cli_scan_without_nmap(monkeypatch):
     monkeypatch.setattr(scanner.shutil, "which", lambda _: None)
-    result = CliRunner().invoke(app, ["scan", "192.168.56.101"])
+    result = CliRunner().invoke(app, ["scan", "192.168.56.101", "--engine", "nmap"])
     assert result.exit_code == 1
+
+
+def test_build_command_several_targets():
+    cmd = scanner.build_command(["10.0.0.1,10.0.0.2", "172.17.0.0/24"])
+    assert cmd[-3:] == ["10.0.0.1", "10.0.0.2", "172.17.0.0/24"]
+
+
+def test_rejects_option_like_target_among_several():
+    with pytest.raises(ValueError):
+        scanner.build_command(["10.0.0.1", "-iL"])
+
+
+def test_build_command_no_chill():
+    cmd = scanner.build_command("10.0.0.5", no_chill=True)
+    assert "-p-" in cmd and "--version-all" in cmd
+    # Custom ports still win over the full range.
+    cmd = scanner.build_command("10.0.0.5", ports="22", no_chill=True)
+    assert ["-p", "22"] == cmd[5:7] and "-p-" not in cmd

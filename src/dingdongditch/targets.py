@@ -36,22 +36,29 @@ def _resolve(hostname: str) -> str:
     return (ipv4 or addrs)[0]
 
 
+def split_targets(specs: str | Iterable[str]) -> list[str]:
+    """Split one or more target strings on commas and spaces; reject option-like ones."""
+    if isinstance(specs, str):
+        specs = [specs]
+    tokens = [t for spec in specs for t in re.split(r"[,\s]+", spec) if t]
+    if not tokens:
+        raise ValueError("No targets given.")
+    for token in tokens:
+        if token.startswith("-"):
+            raise ValueError(f"Invalid target: {token!r}")
+    return tokens
+
+
 def parse_targets(specs: str | Iterable[str], max_hosts: int = MAX_HOSTS) -> list[str]:
     """Parse targets like '10.0.0.1,10.0.0.2', '172.17.0.0/24' or 'localhost'.
 
     `specs` is one string or several (e.g. the CLI arguments). Commas and spaces
     both separate targets. Returns unique IPs in the order they were given.
     """
-    if isinstance(specs, str):
-        specs = [specs]
-    tokens = [t for spec in specs for t in re.split(r"[,\s]+", spec) if t]
-    if not tokens:
-        raise ValueError("No targets given.")
+    tokens = split_targets(specs)
 
     ips: dict[str, None] = {}  # dict keeps insertion order and drops duplicates
     for token in tokens:
-        if token.startswith("-"):
-            raise ValueError(f"Invalid target: {token!r}")
         if "/" in token:
             ips.update(dict.fromkeys(_expand_network(token, max_hosts)))
         else:

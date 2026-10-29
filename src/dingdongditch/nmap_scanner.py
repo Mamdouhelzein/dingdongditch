@@ -5,9 +5,11 @@ from __future__ import annotations
 import io
 import shutil
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
 
 from dingdongditch.nmap_parser import Service, parse_nmap_xml
+from dingdongditch.targets import split_targets
 
 # Scan profiles: how much of the network to look at, and how hard.
 PROFILES: dict[str, list[str]] = {
@@ -34,33 +36,39 @@ def find_nmap() -> str:
 
 
 def build_command(
-    target: str,
+    targets: str | Iterable[str],
     profile: str = "default",
     ports: str | None = None,
     nmap_path: str = "nmap",
+    no_chill: bool = False,
 ) -> list[str]:
-    """Build the nmap command. Output is XML on stdout (-oX -)."""
+    """Build the nmap command. Output is XML on stdout (-oX -).
+
+    `--no-chill` scans all ports (unless `ports` is given) with every version probe.
+    """
     if profile not in PROFILES:
         raise ValueError(f"Unknown profile '{profile}'. Choose from: {', '.join(PROFILES)}")
-    if target.startswith("-"):
-        # Stop a "target" from being interpreted as an nmap option.
-        raise ValueError(f"Invalid target: {target!r}")
+    # Also stops a "target" from being interpreted as an nmap option.
+    target_list = split_targets(targets)
 
     cmd = [nmap_path, "-sV", "--open", "-oX", "-"]
-    cmd += ["-p", ports] if ports else PROFILES[profile]
-    cmd.append(target)
+    cmd += ["-p", ports] if ports else PROFILES["full" if no_chill else profile]
+    if no_chill:
+        cmd.append("--version-all")
+    cmd += target_list
     return cmd
 
 
 def run_scan(
-    target: str,
+    targets: str | Iterable[str],
     profile: str = "default",
     ports: str | None = None,
     save_xml: Path | None = None,
     timeout: int | None = None,
+    no_chill: bool = False,
 ) -> list[Service]:
-    """Scan `target` with nmap -sV and return the open services."""
-    cmd = build_command(target, profile, ports, nmap_path=find_nmap())
+    """Scan `targets` with nmap -sV and return the open services."""
+    cmd = build_command(targets, profile, ports, nmap_path=find_nmap(), no_chill=no_chill)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if result.returncode != 0:
         msg = result.stderr.strip() or f"nmap exited with code {result.returncode}"

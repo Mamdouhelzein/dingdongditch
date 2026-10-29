@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import subprocess
 import sys
+from enum import Enum
 from pathlib import Path
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from dingdongditch import __version__
+from dingdongditch import __version__, nmap_scanner, own_scanner
+from dingdongditch.connect_scan import DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT
 from dingdongditch.nmap_parser import Service, parse_nmap_xml
-from dingdongditch.nmap_scanner import PROFILES, NmapNotFoundError, run_scan
+from dingdongditch.nmap_scanner import PROFILES, NmapNotFoundError
+from dingdongditch.targets import split_targets
 
 app = typer.Typer(
     help="Scan a host and score the risk of its open ports.",
@@ -58,32 +62,87 @@ def _report(services: list[Service], as_json: bool) -> None:
     console.print(table)
 
 
+class Engine(str, Enum):
+    own = "own"
+    nmap = "nmap"
+
+
+def _scan_own(
+    targets: list[str], profile: str, ports: str | None, no_chill: bool,
+    timeout: float, concurrency: int,
+) -> list[Service]:
+    hosts, port_list = own_scanner.resolve(targets, profile, ports, no_chill)
+    err.print(
+        f"[dim]Scanning {len(hosts):,} host(s) x {len(port_list):,} port(s) "
+        "with the built-in scanner...[/dim]"
+    )
+    with err.status("Finding open ports and asking each what it is..."):
+        return own_scanner.run_scan(hosts, port_list, timeout=timeout, concurrency=concurrency)
+
+
+def _scan_nmap(
+    targets: list[str], profile: str, ports: str | None, no_chill: bool, save: Path | None
+) -> list[Service]:
+    tokens = split_targets(targets)
+    err.print(
+        f"[dim]Scanning {' '.join(tokens)} with nmap. "
+        "Version detection can take a few minutes...[/dim]"
+    )
+    with err.status("Running nmap -sV ..."):
+        return nmap_scanner.run_scan(
+            tokens, profile=profile, ports=ports, save_xml=save, no_chill=no_chill
+        )
+
+
 @app.command()
 def scan(
-    target: str = typer.Argument(
-        ..., help="IP, hostname or CIDR range to scan (e.g. 192.168.56.101)."
+    targets: list[str] = typer.Argument(
+        ..., help="One or more IPs, hostnames or subnets, e.g. 172.17.0.2 "
+        "or 10.0.0.1,10.0.0.2 or 172.17.0.0/24.",
+    ),
+    engine: Engine = typer.Option(
+        Engine.own, "--engine", "-e", help="Scanner to use: own (built in) or nmap."
     ),
     profile: str = typer.Option(
         "default", "--profile", "-P",
-        help=f"Scan depth: {', '.join(PROFILES)} (quick = top 100 ports, full = all ports).",
+        help=f"Scan depth: {', '.join(PROFILES)} (quick = ~100 common ports, "
+        "default = ~1,100, full = all 65,535).",
     ),
     ports: str = typer.Option(
-        None, "--ports", "-p", help="Custom ports, e.g. '22,80,443' or '1-1024'."
+        None, "--ports", "-p", help="Custom ports, e.g. '22,80,443' or '8000-9000'."
     ),
-    save: Path = typer.Option(None, "--save", "-o", help="Also save the raw nmap XML here."),
+    no_chill: bool = typer.Option(
+        False, "--no-chill", help="Go harder: all 65,535 ports unless -p is given."
+    ),
+    timeout: float = typer.Option(
+        DEFAULT_TIMEOUT, "--timeout", "-t", min=0.05,
+        help="Built-in scanner: seconds to wait for each port.",
+    ),
+    concurrency: int = typer.Option(
+        DEFAULT_CONCURRENCY, "--concurrency", "-c", min=1,
+        help="Built-in scanner: connections at once (lower it if the scan errors out).",
+    ),
+    save: Path = typer.Option(
+        None, "--save", "-o",
+        help="Also save the raw results here: JSON (own engine) or nmap XML (nmap engine).",
+    ),
     as_json: bool = typer.Option(False, "--json", help="Output JSON instead of a table."),
 ) -> None:
-    """Scan a target with nmap, then analyze the results."""
-    err.print(
-        "[yellow]Only scan systems you own or have written permission to test.[/yellow]\n"
-        f"[dim]Scanning {target} (profile: {ports and 'custom ports' or profile}). "
-        "Version detection can take a few minutes...[/dim]"
-    )
+    """Scan one or more targets, then analyze the results."""
+    err.print("[yellow]Only scan systems you own or have written permission to test.[/yellow]")
     try:
-        with err.status("Running nmap -sV ..."):
-            services = run_scan(target, profile=profile, ports=ports, save_xml=save)
+        if engine is Engine.nmap:
+            services = _scan_nmap(targets, profile, ports, no_chill, save)
+        else:
+            services = _scan_own(targets, profile, ports, no_chill, timeout, concurrency)
+            if save:
+                save.write_text(json.dumps([s.to_dict() for s in services], indent=2))
     except NmapNotFoundError as exc:
         err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    except OSError as exc:
+        hint = " Try a lower --concurrency." if exc.errno in (errno.EMFILE, errno.ENFILE) else ""
+        err.print(f"[red]Scan failed:[/red] {exc}.{hint}")
         raise typer.Exit(1) from exc
     except (ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
         err.print(f"[red]Scan failed:[/red] {exc}")
