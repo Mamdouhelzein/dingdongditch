@@ -8,7 +8,7 @@ Tick a box (`[x]`) when a step is done and committed.
 - [x] 3. Banner grabbing + probes (`probes.py`): listen first, then send safe probes, TLS on TLS ports
 - [x] 4. Fingerprints (`fingerprints.py`): banner → product / version / CPE (~25 common services)
 - [x] 5. CLI: `--engine own|nmap` (default `own`) and `--no-chill` flag
-- [ ] 6. Tests with fake local servers (no network needed, works in CI)
+- [x] 6. Tests with fake local servers (no network needed, works in CI)
 
 ## `--no-chill` extras (Part 1b)
 - [ ] 7. Fast all-ports scan (65,535 ports, auto-lower speed if the system limit is hit)
