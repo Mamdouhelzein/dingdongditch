@@ -239,3 +239,97 @@ def test_add_banners_fills_open_services_only():
 def test_add_banners_rejects_zero_concurrency():
     with pytest.raises(ValueError):
         add_banners([], concurrency=0)
+
+
+# --- Karen mode: extra probes ---------------------------------------------
+
+
+def recording(reply_for):
+    """A silent service that logs each first message and replies with reply_for(request)."""
+    requests = []
+
+    async def handler(reader, writer):
+        try:
+            request = await reader.read(1024)
+        except (ConnectionError, OSError):
+            return
+        requests.append(request)
+        reply = reply_for(request)
+        if reply:
+            writer.write(reply)
+            await writer.drain()
+        writer.close()
+
+    return handler, requests
+
+
+def redis_only(request):
+    if request.startswith(b"INFO server"):
+        return b"$40\r\n# Server\r\nredis_version:6.0.9\r\n"
+    return b"WRONG PROBE"
+
+
+def karen_grab(monkeypatch, name=None, karen_mode=True):
+    async def client(port):
+        monkeypatch.setattr(probes, "SERVICE_NAMES", {port: name} if name else {})
+        return await grab_banner("127.0.0.1", port, **FAST, karen_mode=karen_mode)
+
+    return client
+
+
+def test_without_karen_mode_one_question_only(monkeypatch):
+    handler, requests = recording(redis_only)
+    banner = run_with_server(handler, karen_grab(monkeypatch, karen_mode=False))
+    assert banner.text == "WRONG PROBE"
+    assert len(requests) == 1
+
+
+def test_karen_mode_finds_redis_on_odd_port(monkeypatch):
+    handler, requests = recording(redis_only)
+    banner = run_with_server(handler, karen_grab(monkeypatch))
+    assert "redis_version:6.0.9" in banner.text
+    # HEAD, then HEAD over TLS (a TLS ClientHello), then INFO server: stops there.
+    assert requests[0].startswith(b"HEAD ")
+    assert requests[1][:2] == b"\x16\x03"
+    assert requests[-1] == probes.REDIS_PROBE
+    assert len(requests) == 3
+
+
+def test_karen_mode_finds_tls_service_on_non_web_port(monkeypatch):
+    # An IMAP-over-TLS service on a port we think is SMTP (so we only send a blank line).
+    greeting = talks_first(b"* OK [CAPABILITY IMAP4rev1] Dovecot ready.\r\n")
+    plain = run_with_server(greeting, karen_grab(monkeypatch, "smtp", karen_mode=False),
+                            tls=True)
+    karen = run_with_server(greeting, karen_grab(monkeypatch, "smtp"), tls=True)
+    assert plain.text == ""
+    assert karen.tls is True and "Dovecot ready" in karen.text
+
+
+def test_karen_mode_skips_ports_already_identified(monkeypatch):
+    connections = 0
+
+    async def ssh(reader, writer):
+        nonlocal connections
+        connections += 1
+        writer.write(b"SSH-2.0-OpenSSH_7.4\r\n")
+        await writer.drain()
+        writer.close()
+
+    banner = run_with_server(ssh, karen_grab(monkeypatch))
+    assert banner.text == "SSH-2.0-OpenSSH_7.4"
+    assert connections == 1
+
+
+def test_karen_mode_keeps_first_answer_if_nothing_recognised(monkeypatch):
+    handler, requests = recording(lambda request: b"???")
+    banner = run_with_server(handler, karen_grab(monkeypatch))
+    assert banner.text == "???"
+    # First try + every extra attempt that wasn't already tried (not the same HEAD again).
+    assert len(requests) == len(probes.extra_attempts("127.0.0.1"))
+
+
+def test_extra_probes_are_the_safe_ones():
+    for _, probe in probes.extra_attempts("10.0.0.1"):
+        assert probe in (None, probes.REDIS_PROBE, probes.BLANK_PROBE) or probe.startswith(
+            b"HEAD / HTTP/1.0\r\n"
+        )

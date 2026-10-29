@@ -109,7 +109,7 @@ def _scan_own(
         services = own_scanner.run_scan(
             hosts, port_list, timeout=timeout, concurrency=concurrency,
             on_result=lambda: progress.advance(task),
-            on_slowdown=on_slowdown, on_identify=on_identify,
+            on_slowdown=on_slowdown, on_identify=on_identify, karen_mode=karen_mode,
         )
     if slowest < concurrency:
         err.print(

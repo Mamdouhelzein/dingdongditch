@@ -103,8 +103,9 @@ def fake_engine(monkeypatch):
     seen = {"slowdown_to": None}
 
     def fake_run_scan(hosts, ports, timeout, concurrency,
-                      on_result=None, on_slowdown=None, on_identify=None):
-        seen.update(hosts=hosts, ports=ports, timeout=timeout, concurrency=concurrency)
+                      on_result=None, on_slowdown=None, on_identify=None, karen_mode=False):
+        seen.update(hosts=hosts, ports=ports, timeout=timeout, concurrency=concurrency,
+                    karen_mode=karen_mode)
         for _ in range(3):
             on_result()
         if seen["slowdown_to"]:
@@ -132,6 +133,7 @@ def test_options_reach_the_scanner(fake_engine):
 def test_default_concurrency(fake_engine, args, expected):
     assert scan("10.0.0.1", *args).exit_code == 0
     assert fake_engine["concurrency"] == expected
+    assert fake_engine["karen_mode"] is bool(args)  # extra probes only in Karen mode
 
 
 def test_tells_you_when_it_slowed_down(fake_engine):

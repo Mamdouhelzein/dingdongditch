@@ -1,7 +1,8 @@
 """Ask each open port what it is: listen for a banner first, then send one safe probe.
 
 Detect only: we send what a normal client sends first. No logins, no writes,
-and at most MAX_BYTES are read per port.
+and at most MAX_BYTES are read per answer. Karen mode tries a few more safe
+probes on ports the first one didn't identify.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import ssl
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from dingdongditch.fingerprints import identify
 from dingdongditch.nmap_parser import Service
 from dingdongditch.ports import SERVICE_NAMES, TLS_PORTS
 
@@ -33,19 +35,37 @@ REDIS_PROBE = b"INFO server\r\n"  # read-only; answers with redis_version or "au
 BLANK_PROBE = b"\r\n"             # many services answer an empty line with an error naming them
 
 
+def http_probe(host: str) -> bytes:
+    host_header = f"[{host}]" if ":" in host else host
+    return (
+        f"HEAD / HTTP/1.0\r\nHost: {host_header}\r\n"
+        "User-Agent: dingdongditch\r\n\r\n"
+    ).encode()
+
+
 def probe_for(host: str, port: int) -> bytes:
     """The one safe message to send if the service stays silent."""
     name = SERVICE_NAMES.get(port)
     if name == "redis":
         return REDIS_PROBE
     if name is None or any(web in name for web in _WEB_NAMES):
-        # Unknown ports are most often web apps in labs.
-        host_header = f"[{host}]" if ":" in host else host
-        return (
-            f"HEAD / HTTP/1.0\r\nHost: {host_header}\r\n"
-            "User-Agent: dingdongditch\r\n\r\n"
-        ).encode()
+        return http_probe(host)  # unknown ports are most often web apps in labs
     return BLANK_PROBE
+
+
+def extra_attempts(host: str) -> list[tuple[bool, bytes | None]]:
+    """Karen mode: more (use_tls, probe) tries for ports the first probe didn't identify.
+
+    Each is a fresh connection; we stop at the first answer we recognise.
+    """
+    http = http_probe(host)
+    return [
+        (False, http),
+        (True, http),
+        (False, REDIS_PROBE),
+        (False, BLANK_PROBE),
+        (True, None),  # TLS services that greet after the handshake (e.g. imaps)
+    ]
 
 
 _TLS_HINTS = (b"sent to HTTPS port", b"speaking plain HTTP to an SSL")  # nginx, Apache
@@ -127,35 +147,76 @@ async def _exchange(
             await asyncio.wait_for(writer.wait_closed(), 1.0)
 
 
-async def grab_banner(
-    host: str, port: int, listen: float = LISTEN_TIMEOUT, timeout: float = TIMEOUT
-) -> Banner:
-    """Return whatever the service at host:port says about itself (may be empty)."""
+async def _first_try(
+    host: str, port: int, listen: float, timeout: float
+) -> tuple[Banner | None, set[tuple[bool, bytes | None]]]:
+    """The normal single probe (plus TLS fallback).
+
+    Returns the banner (None if we couldn't connect at all) and the
+    (use_tls, probe) pairs already tried.
+    """
     use_tls = port in TLS_PORTS
     probe = probe_for(host, port)
+    tried = {(use_tls, probe)}
     try:
         raw = await _exchange(host, port, use_tls, probe, listen, timeout)
     except (*_TIMEOUTS, OSError):
-        return Banner(tls=use_tls)
+        return None, tried
 
     sent_http = probe.startswith(b"HEAD ")
     if not use_tls and (_looks_like_tls(raw) or (sent_http and not raw)):
         # Maybe a TLS service on an unusual port (many just hang up on plain
         # text): try once more over TLS, and keep the plain answer if that fails.
+        tried.add((True, probe))
         with contextlib.suppress(*_TIMEOUTS, OSError):
             tls_raw = await _exchange(host, port, True, probe, listen, timeout)
-            return Banner(clean_banner(tls_raw), True)
-    return Banner(clean_banner(raw), use_tls)
+            return Banner(clean_banner(tls_raw), True), tried
+    return Banner(clean_banner(raw), use_tls), tried
+
+
+async def grab_banner(
+    host: str,
+    port: int,
+    listen: float = LISTEN_TIMEOUT,
+    timeout: float = TIMEOUT,
+    karen_mode: bool = False,
+) -> Banner:
+    """Return whatever the service at host:port says about itself (may be empty).
+
+    In Karen mode, a port whose answer we can't identify gets the extra probes
+    from extra_attempts() until one answer is recognised.
+    """
+    banner, tried = await _first_try(host, port, listen, timeout)
+    if banner is None:
+        return Banner(tls=port in TLS_PORTS)
+    if not karen_mode or identify(banner.text):
+        return banner
+
+    for use_tls, probe in extra_attempts(host):
+        if (use_tls, probe) in tried:
+            continue
+        try:
+            # We already know it doesn't talk first, so don't wait long for a greeting.
+            raw = await _exchange(host, port, use_tls, probe, _QUIET_GAP, timeout)
+        except (*_TIMEOUTS, OSError):
+            continue
+        text = clean_banner(raw)
+        if identify(text):
+            return Banner(text, use_tls)
+        if text and not banner.text:
+            banner = Banner(text, use_tls)  # better than nothing
+    return banner
 
 
 async def _add_banners(
-    services: list[Service], concurrency: int, listen: float, timeout: float
+    services: list[Service], concurrency: int, listen: float, timeout: float,
+    karen_mode: bool,
 ) -> None:
     sem = asyncio.Semaphore(concurrency)
 
     async def one(svc: Service) -> None:
         async with sem:
-            banner = await grab_banner(svc.host, svc.port, listen, timeout)
+            banner = await grab_banner(svc.host, svc.port, listen, timeout, karen_mode)
             svc.banner, svc.tls = banner.text, banner.tls
 
     await asyncio.gather(
@@ -168,10 +229,11 @@ def add_banners(
     concurrency: int = DEFAULT_CONCURRENCY,
     listen: float = LISTEN_TIMEOUT,
     timeout: float = TIMEOUT,
+    karen_mode: bool = False,
 ) -> list[Service]:
     """Fill in `banner` and `tls` for every open TCP service and return the list."""
     if concurrency < 1:
         raise ValueError("concurrency must be at least 1")
     services = list(services)
-    asyncio.run(_add_banners(services, concurrency, listen, timeout))
+    asyncio.run(_add_banners(services, concurrency, listen, timeout, karen_mode))
     return services

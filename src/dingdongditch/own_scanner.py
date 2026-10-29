@@ -40,9 +40,11 @@ def run_scan(
     on_result: Callable[[], None] | None = None,
     on_slowdown: Callable[[int], None] | None = None,
     on_identify: Callable[[int], None] | None = None,
+    karen_mode: bool = False,
 ) -> list[Service]:
     """Scan `hosts` x `ports` and return the identified open services.
 
+    `karen_mode` sends extra probes to ports the first probe didn't identify.
     Callbacks (for progress display): `on_result()` after each port check,
     `on_slowdown(n)` if the OS forces fewer connections, and
     `on_identify(n_open)` when banner grabbing starts.
@@ -54,6 +56,7 @@ def run_scan(
     if on_identify:
         on_identify(len(services))
     services = probes.add_banners(
-        services, concurrency=min(concurrency, probes.DEFAULT_CONCURRENCY)
+        services, concurrency=min(concurrency, probes.DEFAULT_CONCURRENCY),
+        karen_mode=karen_mode,
     )
     return fingerprint(services)
