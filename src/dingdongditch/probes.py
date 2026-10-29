@@ -65,10 +65,12 @@ class Banner:
 def clean_banner(raw: bytes) -> str:
     """Decode a banner and escape control characters so it's safe to print.
 
-    A malicious service could otherwise send terminal escape codes.
+    A malicious service could otherwise send terminal escape codes. Bytes that
+    aren't valid UTF-8 (e.g. telnet negotiation) become \\xNN too, so the
+    fingerprints can still see them.
     """
     out = []
-    for ch in raw.decode("utf-8", errors="replace"):
+    for ch in raw.decode("utf-8", errors="backslashreplace"):
         if ch == "\r":
             continue
         if ch in "\n\t" or ch.isprintable():
@@ -153,7 +155,8 @@ async def _add_banners(
 
     async def one(svc: Service) -> None:
         async with sem:
-            svc.banner = (await grab_banner(svc.host, svc.port, listen, timeout)).text
+            banner = await grab_banner(svc.host, svc.port, listen, timeout)
+            svc.banner, svc.tls = banner.text, banner.tls
 
     await asyncio.gather(
         *(one(s) for s in services if s.state == "open" and s.protocol == "tcp")
@@ -166,7 +169,7 @@ def add_banners(
     listen: float = LISTEN_TIMEOUT,
     timeout: float = TIMEOUT,
 ) -> list[Service]:
-    """Fill in `banner` for every open TCP service and return the list."""
+    """Fill in `banner` and `tls` for every open TCP service and return the list."""
     if concurrency < 1:
         raise ValueError("concurrency must be at least 1")
     services = list(services)

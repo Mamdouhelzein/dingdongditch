@@ -61,6 +61,11 @@ def test_clean_banner_escapes_terminal_codes():
     assert clean_banner("evil‮txt".encode()) == "evil\\u202etxt"
 
 
+def test_clean_banner_shows_invalid_utf8_as_hex():
+    # Telnet option negotiation (IAC DO TERMINAL-TYPE).
+    assert clean_banner(b"\xff\xfd\x18") == "\\xff\\xfd\\x18"
+
+
 def test_clean_banner_keeps_binary_handshake_readable():
     # Start of a MySQL greeting: binary length/sequence, then the version string.
     assert "5.7.33" in clean_banner(b"J\x00\x00\x00\n5.7.33\x00")
@@ -226,7 +231,7 @@ def test_add_banners_fills_open_services_only():
         return await asyncio.to_thread(add_banners, services, **FAST)
 
     services = run_with_server(talks_first(b"SSH-2.0-OpenSSH_7.4\r\n"), client)
-    assert services[0].banner == "SSH-2.0-OpenSSH_7.4"
+    assert services[0].banner == "SSH-2.0-OpenSSH_7.4" and services[0].tls is False
     assert services[1].banner == ""
     assert services[0].to_dict()["banner"] == "SSH-2.0-OpenSSH_7.4"
 

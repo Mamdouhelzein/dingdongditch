@@ -1,3 +1,4 @@
+import io
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,19 @@ def test_extracts_product_version_and_cpe():
 def test_include_closed_ports():
     services = parse_nmap_xml(SAMPLE, only_open=False)
     assert len(services) == 4
+
+
+def test_tls_from_tunnel_attribute():
+    xml = (
+        '<nmaprun><host><address addr="10.0.0.5" addrtype="ipv4"/><ports>'
+        '<port protocol="tcp" portid="443"><state state="open"/>'
+        '<service name="http" tunnel="ssl" product="nginx"/></port>'
+        '<port protocol="tcp" portid="80"><state state="open"/>'
+        '<service name="http" product="nginx"/></port>'
+        "</ports></host></nmaprun>"
+    )
+    https, http = parse_nmap_xml(io.StringIO(xml))
+    assert https.tls is True and http.tls is False
 
 
 def test_rejects_non_nmap_xml(tmp_path):

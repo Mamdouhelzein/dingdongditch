@@ -20,6 +20,7 @@ class Service:
     extrainfo: str = ""
     cpes: list[str] = field(default_factory=list)
     banner: str = ""  # raw text the service sent (own engine only), control chars escaped
+    tls: bool = False  # the service spoke TLS (nmap: tunnel="ssl")
 
     @property
     def label(self) -> str:
@@ -75,6 +76,7 @@ def parse_nmap_xml(source: str | Path | IO, only_open: bool = True) -> list[Serv
                     version=svc.get("version", ""),
                     extrainfo=svc.get("extrainfo", ""),
                     cpes=[c.text.strip() for c in svc.findall("cpe") if c.text],
+                    tls=svc.get("tunnel") == "ssl",
                 )
             )
     return services
