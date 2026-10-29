@@ -71,6 +71,9 @@ RULES: list[Rule] = [
     # Remote access
     _r(r"^RFB (?P<extra>\d{3}\.\d{3})", "vnc"),
     _r(r"^\\xff\\xf[b-e]", "telnet"),  # telnet option negotiation (IAC WILL/WONT/DO/DONT)
+    # HTTP/2-only servers (often gRPC) open with a SETTINGS frame:
+    # 3-byte length, type 0x04, flags 0, stream 0.
+    _r(r"^\\x00(?:\\x[0-9a-f]{2}|.){2}\\x04\\x00\\x00\\x00\\x00\\x00", "http2"),
     # Other
     _r(r"VMware Authentication Daemon Version " + _V, "vmware-auth",
        "VMware Authentication Daemon"),

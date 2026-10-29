@@ -47,6 +47,10 @@ CASES = [
     (b"RFB 003.008\n", "vnc", "", "", ""),
     (b"\xff\xfd\x18\xff\xfd\x20\xff\xfd\x23", "telnet", "", "", ""),
     (b"AMQP\x00\x00\x09\x01", "amqp", "", "", ""),
+    # HTTP/2 SETTINGS frame (seen from a real local gRPC service)
+    (b"\x00\x00\x18\x04\x00\x00\x00\x00\x00\x00\x04\x00?\xff\xff\x00\x05\x00@\x00",
+     "http2", "", "", ""),
+    (b"\x00\x00$\x04\x00\x00\x00\x00\x00\x00\x03\x00\x00\x00d", "http2", "", "", ""),
     (b"220 VMware Authentication Daemon Version 1.10: SSL Required\r\n",
      "vmware-auth", "VMware Authentication Daemon", "1.10", ""),
 ]
