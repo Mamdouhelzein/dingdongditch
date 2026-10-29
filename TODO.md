@@ -7,10 +7,10 @@ Tick a box (`[x]`) when a step is done and committed.
 - [x] 2. Port finder (`connect_scan.py`): async TCP connect scan, concurrency limit, timeouts
 - [x] 3. Banner grabbing + probes (`probes.py`): listen first, then send safe probes, TLS on TLS ports
 - [x] 4. Fingerprints (`fingerprints.py`): banner → product / version / CPE (~25 common services)
-- [x] 5. CLI: `--engine own|nmap` (default `own`) and `--no-chill` flag
+- [x] 5. CLI: `--engine own|nmap` (default `own`) and `--karen-mode` flag
 - [x] 6. Tests with fake local servers (no network needed, works in CI)
 
-## `--no-chill` extras (Part 1b)
+## `--karen-mode` extras (Part 1b)
 - [x] 7. Fast all-ports scan (65,535 ports, auto-lower speed if the system limit is hit)
 - [ ] 8. Multiple probes per port
 - [ ] 9. HTTP titles + headers

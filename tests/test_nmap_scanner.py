@@ -73,9 +73,9 @@ def test_rejects_option_like_target_among_several():
         scanner.build_command(["10.0.0.1", "-iL"])
 
 
-def test_build_command_no_chill():
-    cmd = scanner.build_command("10.0.0.5", no_chill=True)
+def test_build_command_karen_mode():
+    cmd = scanner.build_command("10.0.0.5", karen_mode=True)
     assert "-p-" in cmd and "--version-all" in cmd
     # Custom ports still win over the full range.
-    cmd = scanner.build_command("10.0.0.5", ports="22", no_chill=True)
+    cmd = scanner.build_command("10.0.0.5", ports="22", karen_mode=True)
     assert ["-p", "22"] == cmd[5:7] and "-p-" not in cmd

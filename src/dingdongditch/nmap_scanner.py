@@ -40,11 +40,11 @@ def build_command(
     profile: str = "default",
     ports: str | None = None,
     nmap_path: str = "nmap",
-    no_chill: bool = False,
+    karen_mode: bool = False,
 ) -> list[str]:
     """Build the nmap command. Output is XML on stdout (-oX -).
 
-    `--no-chill` scans all ports (unless `ports` is given) with every version probe.
+    `--karen-mode` scans all ports (unless `ports` is given) with every version probe.
     """
     if profile not in PROFILES:
         raise ValueError(f"Unknown profile '{profile}'. Choose from: {', '.join(PROFILES)}")
@@ -52,8 +52,8 @@ def build_command(
     target_list = split_targets(targets)
 
     cmd = [nmap_path, "-sV", "--open", "-oX", "-"]
-    cmd += ["-p", ports] if ports else PROFILES["full" if no_chill else profile]
-    if no_chill:
+    cmd += ["-p", ports] if ports else PROFILES["full" if karen_mode else profile]
+    if karen_mode:
         cmd.append("--version-all")
     cmd += target_list
     return cmd
@@ -65,10 +65,10 @@ def run_scan(
     ports: str | None = None,
     save_xml: Path | None = None,
     timeout: int | None = None,
-    no_chill: bool = False,
+    karen_mode: bool = False,
 ) -> list[Service]:
     """Scan `targets` with nmap -sV and return the open services."""
-    cmd = build_command(targets, profile, ports, nmap_path=find_nmap(), no_chill=no_chill)
+    cmd = build_command(targets, profile, ports, nmap_path=find_nmap(), karen_mode=karen_mode)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if result.returncode != 0:
         msg = result.stderr.strip() or f"nmap exited with code {result.returncode}"

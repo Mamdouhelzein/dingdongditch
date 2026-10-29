@@ -24,7 +24,7 @@ from dingdongditch import __version__, nmap_scanner, own_scanner
 from dingdongditch.connect_scan import (
     DEFAULT_CONCURRENCY,
     DEFAULT_TIMEOUT,
-    NO_CHILL_CONCURRENCY,
+    KAREN_MODE_CONCURRENCY,
 )
 from dingdongditch.nmap_parser import Service, parse_nmap_xml
 from dingdongditch.nmap_scanner import PROFILES, NmapNotFoundError
@@ -79,12 +79,12 @@ class Engine(str, Enum):
 
 
 def _scan_own(
-    targets: list[str], profile: str, ports: str | None, no_chill: bool,
+    targets: list[str], profile: str, ports: str | None, karen_mode: bool,
     timeout: float, concurrency: int | None,
 ) -> list[Service]:
-    hosts, port_list = own_scanner.resolve(targets, profile, ports, no_chill)
+    hosts, port_list = own_scanner.resolve(targets, profile, ports, karen_mode)
     if concurrency is None:
-        concurrency = NO_CHILL_CONCURRENCY if no_chill else DEFAULT_CONCURRENCY
+        concurrency = KAREN_MODE_CONCURRENCY if karen_mode else DEFAULT_CONCURRENCY
     total = len(hosts) * len(port_list)
     err.print(
         f"[dim]Scanning {len(hosts):,} host(s) x {len(port_list):,} port(s) "
@@ -120,7 +120,7 @@ def _scan_own(
 
 
 def _scan_nmap(
-    targets: list[str], profile: str, ports: str | None, no_chill: bool, save: Path | None
+    targets: list[str], profile: str, ports: str | None, karen_mode: bool, save: Path | None
 ) -> list[Service]:
     tokens = split_targets(targets)
     err.print(
@@ -129,7 +129,7 @@ def _scan_nmap(
     )
     with err.status("Running nmap -sV ..."):
         return nmap_scanner.run_scan(
-            tokens, profile=profile, ports=ports, save_xml=save, no_chill=no_chill
+            tokens, profile=profile, ports=ports, save_xml=save, karen_mode=karen_mode
         )
 
 
@@ -150,10 +150,10 @@ def scan(
     ports: str = typer.Option(
         None, "--ports", "-p", help="Custom ports, e.g. '22,80,443' or '8000-9000'."
     ),
-    no_chill: bool = typer.Option(
-        False, "--no-chill",
-        help=f"Go harder: all 65,535 ports unless -p is given, {NO_CHILL_CONCURRENCY} "
-        "connections at once.",
+    karen_mode: bool = typer.Option(
+        False, "--karen-mode",
+        help="Demand to speak to every port's manager: all 65,535 ports unless -p is "
+        f"given, {KAREN_MODE_CONCURRENCY} connections at once.",
     ),
     timeout: float = typer.Option(
         DEFAULT_TIMEOUT, "--timeout", "-t", min=0.05,
@@ -162,7 +162,7 @@ def scan(
     concurrency: int = typer.Option(
         None, "--concurrency", "-c", min=1, show_default=False,
         help=f"Built-in scanner: connections at once [default: {DEFAULT_CONCURRENCY}, "
-        f"{NO_CHILL_CONCURRENCY} with --no-chill]. Lowered automatically if the system "
+        f"{KAREN_MODE_CONCURRENCY} with --karen-mode]. Lowered automatically if the system "
         "runs out of sockets.",
     ),
     save: Path = typer.Option(
@@ -175,9 +175,9 @@ def scan(
     err.print("[yellow]Only scan systems you own or have written permission to test.[/yellow]")
     try:
         if engine is Engine.nmap:
-            services = _scan_nmap(targets, profile, ports, no_chill, save)
+            services = _scan_nmap(targets, profile, ports, karen_mode, save)
         else:
-            services = _scan_own(targets, profile, ports, no_chill, timeout, concurrency)
+            services = _scan_own(targets, profile, ports, karen_mode, timeout, concurrency)
             if save:
                 save.write_text(json.dumps([s.to_dict() for s in services], indent=2))
     except NmapNotFoundError as exc:

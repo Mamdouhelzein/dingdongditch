@@ -19,9 +19,9 @@ from dingdongditch.ports import SERVICE_NAMES
 
 OPEN, CLOSED, FILTERED = "open", "closed", "filtered"
 
-DEFAULT_TIMEOUT = 1.0          # seconds to wait for each connection
-DEFAULT_CONCURRENCY = 500      # connections in flight at once
-NO_CHILL_CONCURRENCY = 1000    # --no-chill; lowered automatically if the OS can't keep up
+DEFAULT_TIMEOUT = 1.0           # seconds to wait for each connection
+DEFAULT_CONCURRENCY = 500       # connections in flight at once
+KAREN_MODE_CONCURRENCY = 1000   # --karen-mode; lowered automatically if the OS can't keep up
 
 # Out of file descriptors: a problem on our side, not a filtered port.
 _OUR_FAULT = {errno.EMFILE, errno.ENFILE}

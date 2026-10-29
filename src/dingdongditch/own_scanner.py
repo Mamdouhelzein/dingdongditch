@@ -19,7 +19,7 @@ def resolve(
     targets: str | Iterable[str],
     profile: str = "default",
     ports: str | None = None,
-    no_chill: bool = False,
+    karen_mode: bool = False,
 ) -> tuple[list[str], list[int]]:
     """Work out which IPs and ports to scan. Custom ports win over profiles."""
     if profile not in PROFILES:
@@ -28,7 +28,7 @@ def resolve(
     if ports:
         port_list = parse_ports(ports)
     else:
-        port_list = PROFILES["full" if no_chill else profile]
+        port_list = PROFILES["full" if karen_mode else profile]
     return hosts, port_list
 
 
