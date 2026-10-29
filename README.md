@@ -22,8 +22,8 @@ scan (nmap -sV)  →  services + versions  →  matching CVEs  →  ML exploit-l
 Requires Python 3.10+ and [nmap](https://nmap.org/download.html) (`brew install nmap` / `sudo apt install nmap`).
 
 ```bash
-git clone https://github.com/Mamdouhelzein/DingDongDitch.git
-cd DingDongDitch
+git clone https://github.com/Mamdouhelzein/dingdongditch.git
+cd dingdongditch
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 ```

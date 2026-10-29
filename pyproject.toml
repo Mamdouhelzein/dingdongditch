@@ -37,8 +37,8 @@ dev = ["pytest>=8", "ruff>=0.5", "shap>=0.45", "jupyter"]
 dingdongditch = "dingdongditch.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/Mamdouhelzein/DingDongDitch"
-Issues = "https://github.com/Mamdouhelzein/DingDongDitch/issues"
+Homepage = "https://github.com/Mamdouhelzein/dingdongditch"
+Issues = "https://github.com/Mamdouhelzein/dingdongditch/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
