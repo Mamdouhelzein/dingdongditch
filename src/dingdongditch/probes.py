@@ -13,7 +13,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from dingdongditch.nmap_parser import Service
-from dingdongditch.ports import TLS_PORTS
+from dingdongditch.ports import SERVICE_NAMES, TLS_PORTS
 
 LISTEN_TIMEOUT = 2.0      # how long to wait for a service that talks first
 TIMEOUT = 3.0             # connecting, and waiting for an answer to a probe
@@ -22,6 +22,38 @@ DEFAULT_CONCURRENCY = 100  # lower than the port scan: each grab holds a connect
 
 _QUIET_GAP = 0.3  # once a service has started talking, stop when it pauses this long
 _TIMEOUTS = (asyncio.TimeoutError, TimeoutError)
+
+# Default service names (from ports.py) that speak HTTP, so a HEAD request fits.
+_WEB_NAMES = (
+    "http", "kibana", "solr", "weblogic", "webmin", "glassfish", "elasticsearch",
+    "couchdb", "docker", "consul", "etcd", "influxdb", "neo4j", "wsman", "activemq-web",
+    "rabbitmq-mgmt", "hadoop", "jboss", "squid",
+)
+REDIS_PROBE = b"INFO server\r\n"  # read-only; answers with redis_version or "auth required"
+BLANK_PROBE = b"\r\n"             # many services answer an empty line with an error naming them
+
+
+def probe_for(host: str, port: int) -> bytes:
+    """The one safe message to send if the service stays silent."""
+    name = SERVICE_NAMES.get(port)
+    if name == "redis":
+        return REDIS_PROBE
+    if name is None or any(web in name for web in _WEB_NAMES):
+        # Unknown ports are most often web apps in labs.
+        host_header = f"[{host}]" if ":" in host else host
+        return (
+            f"HEAD / HTTP/1.0\r\nHost: {host_header}\r\n"
+            "User-Agent: dingdongditch\r\n\r\n"
+        ).encode()
+    return BLANK_PROBE
+
+
+_TLS_HINTS = (b"sent to HTTPS port", b"speaking plain HTTP to an SSL")  # nginx, Apache
+
+
+def _looks_like_tls(raw: bytes) -> bool:
+    """A TLS service answered our plain-text probe (TLS alert/handshake, or a web server hint)."""
+    return raw[:2] in (b"\x15\x03", b"\x16\x03") or any(h in raw for h in _TLS_HINTS)
 
 
 @dataclass
@@ -98,10 +130,19 @@ async def grab_banner(
 ) -> Banner:
     """Return whatever the service at host:port says about itself (may be empty)."""
     use_tls = port in TLS_PORTS
+    probe = probe_for(host, port)
     try:
-        raw = await _exchange(host, port, use_tls, None, listen, timeout)
+        raw = await _exchange(host, port, use_tls, probe, listen, timeout)
     except (*_TIMEOUTS, OSError):
         return Banner(tls=use_tls)
+
+    sent_http = probe.startswith(b"HEAD ")
+    if not use_tls and (_looks_like_tls(raw) or (sent_http and not raw)):
+        # Maybe a TLS service on an unusual port (many just hang up on plain
+        # text): try once more over TLS, and keep the plain answer if that fails.
+        with contextlib.suppress(*_TIMEOUTS, OSError):
+            tls_raw = await _exchange(host, port, True, probe, listen, timeout)
+            return Banner(clean_banner(tls_raw), True)
     return Banner(clean_banner(raw), use_tls)
 
 
