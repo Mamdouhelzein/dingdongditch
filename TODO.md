@@ -13,7 +13,7 @@ Tick a box (`[x]`) when a step is done and committed.
 ## `--karen-mode` extras (Part 1b)
 - [x] 7. Fast all-ports scan (65,535 ports, auto-lower speed if the system limit is hit)
 - [x] 8. Multiple probes per port
-- [ ] 9. HTTP titles + headers
+- [x] 9. HTTP titles + headers
 - [ ] 10. TLS certificate info (subject, issuer, expiry)
 - [ ] 11. OS guess from banners (shown as a guess, with where it came from)
 

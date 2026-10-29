@@ -187,3 +187,71 @@ def fingerprint(services: Iterable[Service]) -> list[Service]:
         if svc.tls and svc.name == "http":
             svc.name = "https"
     return services
+
+
+# --- Karen mode: the app behind the web server -------------------------------
+# A port that only said "Jetty" or "Apache" is often Jenkins, Tomcat, Solr, ...
+# These rules look at the home page's <title>, headers and body.
+
+TITLE_RULES: list[Rule] = [
+    _r(r"Apache Tomcat(?:/" + _V + ")?", "http", "Apache Tomcat", "apache:tomcat"),
+    _r(r"\[Jenkins\]|^Jenkins\b", "http", "Jenkins", "jenkins:jenkins"),
+    _r(r"Struts2? Showcase", "http", "Apache Struts", "apache:struts"),
+    _r(r"Solr Admin", "http", "Apache Solr", "apache:solr"),
+    _r(r"Apache ActiveMQ", "http", "Apache ActiveMQ", "apache:activemq"),
+    _r(r"phpMyAdmin", "http", "phpMyAdmin", "phpmyadmin:phpmyadmin"),
+    _r(r"\bKibana\b", "http", "Kibana", "elastic:kibana"),
+    _r(r"\bGrafana\b", "http", "Grafana", "grafana:grafana"),
+    _r(r"\bGitLab\b", "http", "GitLab", "gitlab:gitlab"),
+    _r(r"\bWebmin\b", "http", "Webmin", "webmin:webmin"),
+    _r(r"\bConfluence\b", "http", "Atlassian Confluence", "atlassian:confluence"),
+    _r(r"\bJira\b", "http", "Atlassian Jira", "atlassian:jira"),
+    _r(r"Nexus Repository Manager", "http", "Nexus Repository Manager",
+       "sonatype:nexus_repository_manager"),
+    _r(r"\bThinkPHP\b", "http", "ThinkPHP", "thinkphp:thinkphp"),
+]
+
+APP_HEADER_RULES: dict[str, Rule] = {
+    "x-jenkins": HEADER_RULES["x-jenkins"],
+    "x-generator": _r(r"^Drupal (?P<version>\d+)", "http", "Drupal", "drupal:drupal"),
+}
+
+BODY_RULES: list[Rule] = [
+    # Elasticsearch answers GET / with JSON: {"version": {"number": "1.4.2", "lucene_version": ...
+    _r(r'"number"\s*:\s*"' + _V + r'"[\s\S]*"lucene_version"', "http", "Elasticsearch",
+       "elastic:elasticsearch"),
+]
+
+
+def identify_app(title: str, headers: dict[str, str], body: str) -> Fingerprint | None:
+    """Recognise the web app from a fetched home page, or None."""
+    for header, rule in APP_HEADER_RULES.items():
+        if header in headers and (fp := _apply(rule, headers[header])):
+            return fp
+    for rule in TITLE_RULES:
+        if title and (fp := _apply(rule, title)):
+            return fp
+    for rule in BODY_RULES:
+        if fp := _apply(rule, body):
+            return fp
+    return None
+
+
+def refine_with_app(svc: Service, app: Fingerprint) -> None:
+    """Make the app the service's product, keeping the web server as extra info and CPE."""
+    if app.product != svc.product:
+        if svc.product:
+            svc.extrainfo = "; ".join(x for x in (f"on {svc.label}", svc.extrainfo) if x)
+        svc.product, svc.version = app.product, app.version
+    elif app.version and not svc.version:
+        svc.version = app.version
+    else:
+        return  # nothing new
+    app_cpes = app.cpes or []
+    app_keys = {_cpe_key(c) for c in app_cpes}
+    svc.cpes = app_cpes + [c for c in svc.cpes if _cpe_key(c) not in app_keys]
+
+
+def _cpe_key(cpe: str) -> str:
+    """'cpe:/a:apache:tomcat:8.5' -> 'apache:tomcat' (same product, any version)."""
+    return ":".join(cpe.split(":")[2:4])

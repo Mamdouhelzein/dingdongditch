@@ -11,6 +11,7 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -69,7 +70,12 @@ def _report(services: list[Service], as_json: bool) -> None:
         table.add_column(col)
     for s in services:
         risk = "[dim]model not trained yet[/dim]"
-        table.add_row(s.host, f"{s.port}/{s.protocol}", s.name, s.label, risk)
+        # Everything below comes from the scanned service: escape it so text like
+        # "[red]" in a banner or page title can't restyle or fake the output.
+        product = escape(s.label)
+        if s.http_title:
+            product += f"\n[dim]{escape(s.http_title)}[/dim]"
+        table.add_row(s.host, f"{s.port}/{s.protocol}", escape(s.name), product, risk)
     console.print(table)
 
 

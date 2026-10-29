@@ -23,7 +23,7 @@ MAX_BYTES = 4096          # never read more than this from one port
 DEFAULT_CONCURRENCY = 100  # lower than the port scan: each grab holds a connection longer
 
 _QUIET_GAP = 0.3  # once a service has started talking, stop when it pauses this long
-_TIMEOUTS = (asyncio.TimeoutError, TimeoutError)
+TIMEOUT_ERRORS = (asyncio.TimeoutError, TimeoutError)
 
 # Default service names (from ports.py) that speak HTTP, so a HEAD request fits.
 _WEB_NAMES = (
@@ -35,12 +35,16 @@ REDIS_PROBE = b"INFO server\r\n"  # read-only; answers with redis_version or "au
 BLANK_PROBE = b"\r\n"             # many services answer an empty line with an error naming them
 
 
-def http_probe(host: str) -> bytes:
+def http_request(host: str, method: str = "HEAD") -> bytes:
     host_header = f"[{host}]" if ":" in host else host
     return (
-        f"HEAD / HTTP/1.0\r\nHost: {host_header}\r\n"
+        f"{method} / HTTP/1.0\r\nHost: {host_header}\r\n"
         "User-Agent: dingdongditch\r\n\r\n"
     ).encode()
+
+
+def http_probe(host: str) -> bytes:
+    return http_request(host, "HEAD")
 
 
 def probe_for(host: str, port: int) -> bytes:
@@ -117,7 +121,7 @@ async def _read(reader: asyncio.StreamReader, timeout: float) -> bytes:
     while len(data) < MAX_BYTES:
         try:
             chunk = await asyncio.wait_for(reader.read(MAX_BYTES - len(data)), wait)
-        except (*_TIMEOUTS, OSError):
+        except (*TIMEOUT_ERRORS, OSError):
             break
         if not chunk:
             break
@@ -126,16 +130,19 @@ async def _read(reader: asyncio.StreamReader, timeout: float) -> bytes:
     return data
 
 
-async def _exchange(
+async def exchange(
     host: str, port: int, use_tls: bool, probe: bytes | None, listen: float, timeout: float
 ) -> bytes:
-    """Connect, listen first, and send `probe` only if the service stays silent."""
+    """Connect, listen first, and send `probe` only if the service stays silent.
+
+    `listen=0` skips listening and sends the probe straight away.
+    """
     reader, writer = await asyncio.wait_for(
         asyncio.open_connection(host, port, ssl=_tls_context() if use_tls else None),
         timeout,
     )
     try:
-        data = await _read(reader, listen)
+        data = await _read(reader, listen) if listen > 0 else b""
         if not data and probe:
             writer.write(probe)
             await writer.drain()
@@ -143,7 +150,7 @@ async def _exchange(
         return data
     finally:
         writer.close()
-        with contextlib.suppress(*_TIMEOUTS, OSError):
+        with contextlib.suppress(*TIMEOUT_ERRORS, OSError):
             await asyncio.wait_for(writer.wait_closed(), 1.0)
 
 
@@ -159,8 +166,8 @@ async def _first_try(
     probe = probe_for(host, port)
     tried = {(use_tls, probe)}
     try:
-        raw = await _exchange(host, port, use_tls, probe, listen, timeout)
-    except (*_TIMEOUTS, OSError):
+        raw = await exchange(host, port, use_tls, probe, listen, timeout)
+    except (*TIMEOUT_ERRORS, OSError):
         return None, tried
 
     sent_http = probe.startswith(b"HEAD ")
@@ -168,8 +175,8 @@ async def _first_try(
         # Maybe a TLS service on an unusual port (many just hang up on plain
         # text): try once more over TLS, and keep the plain answer if that fails.
         tried.add((True, probe))
-        with contextlib.suppress(*_TIMEOUTS, OSError):
-            tls_raw = await _exchange(host, port, True, probe, listen, timeout)
+        with contextlib.suppress(*TIMEOUT_ERRORS, OSError):
+            tls_raw = await exchange(host, port, True, probe, listen, timeout)
             return Banner(clean_banner(tls_raw), True), tried
     return Banner(clean_banner(raw), use_tls), tried
 
@@ -197,8 +204,8 @@ async def grab_banner(
             continue
         try:
             # We already know it doesn't talk first, so don't wait long for a greeting.
-            raw = await _exchange(host, port, use_tls, probe, _QUIET_GAP, timeout)
-        except (*_TIMEOUTS, OSError):
+            raw = await exchange(host, port, use_tls, probe, _QUIET_GAP, timeout)
+        except (*TIMEOUT_ERRORS, OSError):
             continue
         text = clean_banner(raw)
         if identify(text):

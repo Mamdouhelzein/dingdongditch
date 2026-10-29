@@ -21,6 +21,8 @@ class Service:
     cpes: list[str] = field(default_factory=list)
     banner: str = ""  # raw text the service sent (own engine only), control chars escaped
     tls: bool = False  # the service spoke TLS (nmap: tunnel="ssl")
+    http_title: str = ""  # Karen mode: <title> of the home page
+    http_headers: dict[str, str] = field(default_factory=dict)  # Karen mode: telling headers
 
     @property
     def label(self) -> str:
