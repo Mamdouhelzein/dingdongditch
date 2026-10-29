@@ -6,7 +6,7 @@ pipeline doesn't care which one ran.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from dingdongditch import connect_scan, probes
 from dingdongditch.fingerprints import fingerprint
@@ -37,9 +37,22 @@ def run_scan(
     ports: list[int],
     timeout: float = connect_scan.DEFAULT_TIMEOUT,
     concurrency: int = connect_scan.DEFAULT_CONCURRENCY,
+    on_result: Callable[[], None] | None = None,
+    on_slowdown: Callable[[int], None] | None = None,
+    on_identify: Callable[[int], None] | None = None,
 ) -> list[Service]:
-    """Scan `hosts` x `ports` and return the identified open services."""
-    services = connect_scan.scan(hosts, ports, timeout=timeout, concurrency=concurrency)
+    """Scan `hosts` x `ports` and return the identified open services.
+
+    Callbacks (for progress display): `on_result()` after each port check,
+    `on_slowdown(n)` if the OS forces fewer connections, and
+    `on_identify(n_open)` when banner grabbing starts.
+    """
+    services = connect_scan.scan(
+        hosts, ports, timeout=timeout, concurrency=concurrency,
+        on_result=on_result, on_slowdown=on_slowdown,
+    )
+    if on_identify:
+        on_identify(len(services))
     services = probes.add_banners(
         services, concurrency=min(concurrency, probes.DEFAULT_CONCURRENCY)
     )

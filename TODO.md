@@ -11,7 +11,7 @@ Tick a box (`[x]`) when a step is done and committed.
 - [x] 6. Tests with fake local servers (no network needed, works in CI)
 
 ## `--no-chill` extras (Part 1b)
-- [ ] 7. Fast all-ports scan (65,535 ports, auto-lower speed if the system limit is hit)
+- [x] 7. Fast all-ports scan (65,535 ports, auto-lower speed if the system limit is hit)
 - [ ] 8. Multiple probes per port
 - [ ] 9. HTTP titles + headers
 - [ ] 10. TLS certificate info (subject, issuer, expiry)

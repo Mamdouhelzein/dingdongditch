@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 from dingdongditch import own_scanner
 from dingdongditch.cli import app
+from dingdongditch.connect_scan import DEFAULT_CONCURRENCY, NO_CHILL_CONCURRENCY
 from dingdongditch.ports import PROFILES
 
 
@@ -96,17 +97,45 @@ def test_resolve_profiles_and_no_chill():
     assert own_scanner.resolve("127.0.0.1", ports="22,80", no_chill=True)[1] == [22, 80]
 
 
-def test_options_reach_the_scanner(monkeypatch):
-    seen = {}
+@pytest.fixture
+def fake_engine(monkeypatch):
+    """Replace the real scan; record what the CLI asked for."""
+    seen = {"slowdown_to": None}
 
-    def fake_run_scan(hosts, ports, timeout, concurrency):
+    def fake_run_scan(hosts, ports, timeout, concurrency,
+                      on_result=None, on_slowdown=None, on_identify=None):
         seen.update(hosts=hosts, ports=ports, timeout=timeout, concurrency=concurrency)
+        for _ in range(3):
+            on_result()
+        if seen["slowdown_to"]:
+            on_slowdown(seen["slowdown_to"])
+        on_identify(0)
         return []
 
     monkeypatch.setattr(own_scanner, "run_scan", fake_run_scan)
+    return seen
+
+
+def test_options_reach_the_scanner(fake_engine):
     result = scan("10.0.0.1 10.0.0.2", "--no-chill", "-t", "0.5", "-c", "50")
     assert result.exit_code == 0, result.output
-    assert seen["hosts"] == ["10.0.0.1", "10.0.0.2"]
-    assert len(seen["ports"]) == 65535
-    assert (seen["timeout"], seen["concurrency"]) == (0.5, 50)
+    assert fake_engine["hosts"] == ["10.0.0.1", "10.0.0.2"]
+    assert len(fake_engine["ports"]) == 65535
+    assert (fake_engine["timeout"], fake_engine["concurrency"]) == (0.5, 50)
     assert "No open ports found." in result.stdout
+
+
+@pytest.mark.parametrize("args, expected", [
+    ([], DEFAULT_CONCURRENCY),
+    (["--no-chill"], NO_CHILL_CONCURRENCY),
+])
+def test_default_concurrency(fake_engine, args, expected):
+    assert scan("10.0.0.1", *args).exit_code == 0
+    assert fake_engine["concurrency"] == expected
+
+
+def test_tells_you_when_it_slowed_down(fake_engine):
+    fake_engine["slowdown_to"] = 300
+    result = scan("10.0.0.1", "--no-chill")
+    assert result.exit_code == 0
+    assert "slowed down to about 300" in result.output and "-c 300" in result.output

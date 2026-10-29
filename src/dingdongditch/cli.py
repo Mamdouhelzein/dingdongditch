@@ -11,10 +11,21 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    TextColumn,
+    TimeRemainingColumn,
+)
 from rich.table import Table
 
 from dingdongditch import __version__, nmap_scanner, own_scanner
-from dingdongditch.connect_scan import DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT
+from dingdongditch.connect_scan import (
+    DEFAULT_CONCURRENCY,
+    DEFAULT_TIMEOUT,
+    NO_CHILL_CONCURRENCY,
+)
 from dingdongditch.nmap_parser import Service, parse_nmap_xml
 from dingdongditch.nmap_scanner import PROFILES, NmapNotFoundError
 from dingdongditch.targets import split_targets
@@ -69,15 +80,43 @@ class Engine(str, Enum):
 
 def _scan_own(
     targets: list[str], profile: str, ports: str | None, no_chill: bool,
-    timeout: float, concurrency: int,
+    timeout: float, concurrency: int | None,
 ) -> list[Service]:
     hosts, port_list = own_scanner.resolve(targets, profile, ports, no_chill)
+    if concurrency is None:
+        concurrency = NO_CHILL_CONCURRENCY if no_chill else DEFAULT_CONCURRENCY
+    total = len(hosts) * len(port_list)
     err.print(
         f"[dim]Scanning {len(hosts):,} host(s) x {len(port_list):,} port(s) "
-        "with the built-in scanner...[/dim]"
+        f"with the built-in scanner ({concurrency} at once)...[/dim]"
     )
-    with err.status("Finding open ports and asking each what it is..."):
-        return own_scanner.run_scan(hosts, port_list, timeout=timeout, concurrency=concurrency)
+    slowest = concurrency
+
+    with Progress(
+        TextColumn("{task.description}"), BarColumn(), MofNCompleteColumn(),
+        TimeRemainingColumn(), console=err, transient=True,
+    ) as progress:
+        task = progress.add_task("Checking ports", total=total)
+
+        def on_slowdown(n: int) -> None:
+            nonlocal slowest
+            slowest = min(slowest, n)
+
+        def on_identify(n_open: int) -> None:
+            progress.update(task, description=f"Asking {n_open} open port(s) what they are",
+                            total=None)
+
+        services = own_scanner.run_scan(
+            hosts, port_list, timeout=timeout, concurrency=concurrency,
+            on_result=lambda: progress.advance(task),
+            on_slowdown=on_slowdown, on_identify=on_identify,
+        )
+    if slowest < concurrency:
+        err.print(
+            f"[yellow]The system ran out of sockets, so the scan slowed down to about "
+            f"{slowest} connections at once. Use -c {slowest} next time.[/yellow]"
+        )
+    return services
 
 
 def _scan_nmap(
@@ -112,15 +151,19 @@ def scan(
         None, "--ports", "-p", help="Custom ports, e.g. '22,80,443' or '8000-9000'."
     ),
     no_chill: bool = typer.Option(
-        False, "--no-chill", help="Go harder: all 65,535 ports unless -p is given."
+        False, "--no-chill",
+        help=f"Go harder: all 65,535 ports unless -p is given, {NO_CHILL_CONCURRENCY} "
+        "connections at once.",
     ),
     timeout: float = typer.Option(
         DEFAULT_TIMEOUT, "--timeout", "-t", min=0.05,
         help="Built-in scanner: seconds to wait for each port.",
     ),
     concurrency: int = typer.Option(
-        DEFAULT_CONCURRENCY, "--concurrency", "-c", min=1,
-        help="Built-in scanner: connections at once (lower it if the scan errors out).",
+        None, "--concurrency", "-c", min=1, show_default=False,
+        help=f"Built-in scanner: connections at once [default: {DEFAULT_CONCURRENCY}, "
+        f"{NO_CHILL_CONCURRENCY} with --no-chill]. Lowered automatically if the system "
+        "runs out of sockets.",
     ),
     save: Path = typer.Option(
         None, "--save", "-o",

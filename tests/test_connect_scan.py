@@ -112,3 +112,86 @@ def test_concurrency_limit_is_respected(monkeypatch):
 def test_rejects_zero_concurrency():
     with pytest.raises(ValueError):
         asyncio.run(scan_async(["10.0.0.1"], [80], concurrency=0))
+
+
+def _limited_open_connection(limit):
+    """Fake open_connection that fails with EMFILE above `limit` sockets in flight."""
+    state = {"in_flight": 0, "peak": 0}
+
+    async def fake(host, port):
+        if state["in_flight"] >= limit:
+            raise OSError(errno.EMFILE, "Too many open files")
+        state["in_flight"] += 1
+        state["peak"] = max(state["peak"], state["in_flight"])
+        await asyncio.sleep(0.005)
+        state["in_flight"] -= 1
+        return None, _FakeWriter()
+
+    return fake, state
+
+
+def test_slows_down_instead_of_failing_when_out_of_sockets(monkeypatch):
+    fake, state = _limited_open_connection(limit=20)
+    monkeypatch.setattr(connect_scan.asyncio, "open_connection", fake)
+    slowdowns = []
+
+    results = asyncio.run(
+        scan_async(["10.0.0.1"], range(1, 1001), concurrency=100, on_slowdown=slowdowns.append)
+    )
+    assert [p for _, p, _ in results] == list(range(1, 1001))  # every port, once
+    assert all(s == OPEN for _, _, s in results)
+    assert state["peak"] <= 20
+    assert slowdowns and min(slowdowns) >= 1
+
+
+def test_last_worker_waits_for_sockets(monkeypatch):
+    calls = {"n": 0}
+
+    async def flaky(host, port):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise OSError(errno.EMFILE, "Too many open files")
+        return None, _FakeWriter()
+
+    monkeypatch.setattr(connect_scan.asyncio, "open_connection", flaky)
+    results = asyncio.run(scan_async(["10.0.0.1"], [22, 80], concurrency=1))
+    assert [(p, s) for _, p, s in results] == [(22, OPEN), (80, OPEN)]
+
+
+def test_progress_callback(monkeypatch):
+    async def fake(host, port):
+        return None, _FakeWriter()
+
+    monkeypatch.setattr(connect_scan.asyncio, "open_connection", fake)
+    done = []
+    asyncio.run(
+        scan_async(["10.0.0.1", "10.0.0.2"], range(1, 51), on_result=lambda: done.append(1))
+    )
+    assert len(done) == 100
+
+
+def test_raise_open_file_limit():
+    resource = pytest.importorskip("resource")  # Linux/macOS only
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    try:
+        new = connect_scan.raise_open_file_limit(soft + 10)
+        expected = soft + 10 if hard == resource.RLIM_INFINITY else min(soft + 10, hard)
+        assert new == expected
+        # Never lowers an existing limit.
+        assert connect_scan.raise_open_file_limit(1) == new
+    finally:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
+
+
+def test_raise_open_file_limit_without_resource(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_resource(name, *args, **kwargs):
+        if name == "resource":
+            raise ImportError
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_resource)
+    assert connect_scan.raise_open_file_limit(2000) is None
