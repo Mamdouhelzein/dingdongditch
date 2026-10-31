@@ -333,3 +333,11 @@ def test_extra_probes_are_the_safe_ones():
         assert probe in (None, probes.REDIS_PROBE, probes.BLANK_PROBE) or probe.startswith(
             b"HEAD / HTTP/1.0\r\n"
         )
+
+
+def test_tls_context_allows_old_versions_without_warning(recwarn):
+    probes.tls_context.cache_clear()
+    ctx = probes.tls_context()
+    assert ctx.minimum_version == ssl.TLSVersion.TLSv1
+    assert ctx.verify_mode == ssl.CERT_NONE and ctx.check_hostname is False
+    assert not [w for w in recwarn if issubclass(w.category, DeprecationWarning)]

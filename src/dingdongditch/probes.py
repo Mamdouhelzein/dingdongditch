@@ -10,8 +10,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import ssl
+import warnings
 from collections.abc import Iterable
 from dataclasses import dataclass
+from functools import lru_cache
 
 from dingdongditch.fingerprints import identify
 from dingdongditch.nmap_parser import Service
@@ -106,11 +108,22 @@ def clean_banner(raw: bytes) -> str:
     return "".join(out).strip()
 
 
-def _tls_context() -> ssl.SSLContext:
-    ctx = ssl.create_default_context()
-    # Lab services use self-signed certificates and we only read, so don't verify.
+@lru_cache(maxsize=1)
+def tls_context() -> ssl.SSLContext:
+    """A shared TLS client context for looking, not trusting.
+
+    Lab services use self-signed certificates and we only read, so don't verify.
+    Old services (TLS 1.0/1.1, weak ciphers) are common in labs and exactly what
+    we want to find, so allow them too where the local OpenSSL still can.
+    """
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
+    with contextlib.suppress(ValueError, ssl.SSLError), warnings.catch_warnings():
+        # Python warns that TLS 1.0 is deprecated, which is why we want to spot it.
+        warnings.simplefilter("ignore", DeprecationWarning)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1
+        ctx.set_ciphers("ALL:@SECLEVEL=0")
     return ctx
 
 
@@ -138,7 +151,7 @@ async def exchange(
     `listen=0` skips listening and sends the probe straight away.
     """
     reader, writer = await asyncio.wait_for(
-        asyncio.open_connection(host, port, ssl=_tls_context() if use_tls else None),
+        asyncio.open_connection(host, port, ssl=tls_context() if use_tls else None),
         timeout,
     )
     try:
