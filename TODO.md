@@ -15,7 +15,7 @@ Tick a box (`[x]`) when a step is done and committed.
 - [x] 8. Multiple probes per port
 - [x] 9. HTTP titles + headers
 - [x] 10. TLS certificate info (subject, issuer, expiry)
-- [ ] 11. OS guess from banners (shown as a guess, with where it came from)
+- [x] 11. OS guess from banners (shown as a guess, with where it came from)
 
 ## Safe misconfiguration checks (show CONFIRMED)
 - [ ] 12. Anonymous FTP login allowed

@@ -84,6 +84,13 @@ def _report(services: list[Service], as_json: bool) -> None:
         table.add_row(s.host, f"{s.port}/{s.protocol}", escape(s.name), product, risk)
     console.print(table)
 
+    seen: set[str] = set()
+    for s in services:
+        if s.os_guess and s.host not in seen:
+            seen.add(s.host)
+            console.print(f"OS guess for {escape(s.host)}: [bold]{escape(s.os_guess)}[/bold]")
+            console.print(f"[dim]  from {escape('; '.join(s.os_evidence))}[/dim]")
+
 
 class Engine(str, Enum):
     own = "own"

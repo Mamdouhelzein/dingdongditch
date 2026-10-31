@@ -24,6 +24,8 @@ class Service:
     http_title: str = ""  # Karen mode: <title> of the home page
     http_headers: dict[str, str] = field(default_factory=dict)  # Karen mode: telling headers
     tls_cert: dict = field(default_factory=dict)  # Karen mode: see tls_info.describe_cert
+    os_guess: str = ""  # Karen mode: best guess for this host's OS, from os_guess.py
+    os_evidence: list[str] = field(default_factory=list)  # the clues behind that guess
 
     @property
     def label(self) -> str:
