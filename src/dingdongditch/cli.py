@@ -70,6 +70,8 @@ def _report(services: list[Service], as_json: bool) -> None:
         table.add_column(col)
     for s in services:
         risk = "[dim]model not trained yet[/dim]"
+        if s.findings:
+            risk = f"[bold red]{escape(s.findings[0].status)}[/bold red]"
         # Everything below comes from the scanned service: escape it so text like
         # "[red]" in a banner or page title can't restyle or fake the output.
         product = escape(s.label)
@@ -90,6 +92,15 @@ def _report(services: list[Service], as_json: bool) -> None:
             seen.add(s.host)
             console.print(f"OS guess for {escape(s.host)}: [bold]{escape(s.os_guess)}[/bold]")
             console.print(f"[dim]  from {escape('; '.join(s.os_evidence))}[/dim]")
+
+    for s in services:
+        for finding in s.findings:
+            console.print(
+                f"[bold red]{escape(finding.status)}[/bold red] "
+                f"{escape(s.host)}:{s.port} {escape(finding.title)}"
+            )
+            console.print(f"  Why: {escape(finding.why)}")
+            console.print(f"  Fix: {escape(finding.fix)}")
 
 
 class Engine(str, Enum):

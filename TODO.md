@@ -18,7 +18,7 @@ Tick a box (`[x]`) when a step is done and committed.
 - [x] 11. OS guess from banners (shown as a guess, with where it came from)
 
 ## Safe misconfiguration checks (show CONFIRMED)
-- [ ] 12. Anonymous FTP login allowed
+- [x] 12. Anonymous FTP login allowed
 - [ ] 13. Redis with no password
 - [ ] 14. MongoDB with no auth
 - [ ] 15. Telnet open

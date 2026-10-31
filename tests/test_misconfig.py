@@ -1,0 +1,254 @@
+import asyncio
+import json
+import socketserver
+import ssl
+import threading
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from dingdongditch import misconfig, own_scanner
+from dingdongditch.cli import app
+from dingdongditch.misconfig import FTP_ANONYMOUS
+from dingdongditch.nmap_parser import Service
+
+FIXTURES = Path(__file__).parent / "fixtures"
+USER = b"USER anonymous"
+PASS = b"PASS anonymous@"
+QUIT = b"QUIT"
+
+
+def fake_ftp(replies: dict[bytes, bytes], greeting: bytes = b"220 Welcome\r\n"):
+    """A fake FTP server: greets, then answers each command from `replies`. Logs commands."""
+    commands = []
+
+    async def handler(reader, writer):
+        try:
+            writer.write(greeting)
+            await writer.drain()
+            while line := await reader.readline():
+                command = line.strip()
+                commands.append(command)
+                writer.write(replies.get(command, b"502 Not implemented\r\n"))
+                await writer.drain()
+                if command == QUIT:
+                    break
+        except OSError:
+            pass
+        finally:
+            writer.close()
+
+    return handler, commands
+
+
+def run_checks(handler, name="ftp", tls=False, timeout=2.0, state="open") -> Service:
+    async def main():
+        ctx = None
+        if tls:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.load_cert_chain(FIXTURES / "test_only_cert.pem", FIXTURES / "test_only_key.pem")
+        server = await asyncio.start_server(handler, "127.0.0.1", 0, ssl=ctx)
+        port = server.sockets[0].getsockname()[1]
+        svc = Service("127.0.0.1", port, "tcp", state, name=name, tls=tls)
+        async with server:
+            await misconfig._run_checks([svc], concurrency=5, timeout=timeout)
+            server.close()
+        return svc
+
+    return asyncio.run(main())
+
+
+ALLOWED = {USER: b"331 Send password\r\n", PASS: b"230 Login successful\r\n",
+           QUIT: b"221 Goodbye\r\n"}
+
+
+def test_anonymous_ftp_confirmed():
+    handler, commands = fake_ftp(ALLOWED)
+    assert run_checks(handler).findings == [FTP_ANONYMOUS]
+    assert FTP_ANONYMOUS.status == "CONFIRMED"
+
+
+def test_sends_only_login_and_quit():
+    # The safety promise: no other credentials, and no LIST / RETR / STOR.
+    handler, commands = fake_ftp(ALLOWED)
+    run_checks(handler)
+    assert commands == [USER, PASS, QUIT]
+
+
+def test_rejected_login_is_not_a_finding():
+    handler, commands = fake_ftp({USER: b"331 Send password\r\n", PASS: b"530 Login incorrect\r\n"})
+    assert run_checks(handler).findings == []
+    assert commands == [USER, PASS, QUIT]  # exactly one try, no guessing
+
+
+def test_anonymous_user_refused_outright():
+    handler, commands = fake_ftp({USER: b"530 Anonymous not allowed\r\n"})
+    assert run_checks(handler).findings == []
+    assert PASS not in commands
+
+
+def test_login_without_password_step():
+    handler, commands = fake_ftp({USER: b"230 Logged in\r\n"})
+    assert run_checks(handler).findings == [FTP_ANONYMOUS]
+    assert commands == [USER, QUIT]
+
+
+def test_multi_line_replies():
+    replies = {USER: b"331 Send password\r\n",
+               PASS: b"230-Welcome\r\n230-Rules apply\r\n230 Logged in\r\n"}
+    greeting = b"220-Welcome to the lab\r\n220-Be nice\r\n220 Ready\r\n"
+    handler, _ = fake_ftp(replies, greeting)
+    assert run_checks(handler).findings == [FTP_ANONYMOUS]
+
+
+@pytest.mark.parametrize("greeting", [
+    b"SSH-2.0-OpenSSH_7.4\r\n",
+    b"421 Too many connections\r\n",
+    b"hello\r\n",
+])
+def test_no_login_sent_to_things_that_arent_ready_ftp(greeting):
+    handler, commands = fake_ftp(ALLOWED, greeting)
+    assert run_checks(handler).findings == []
+    assert commands == []
+
+
+def test_only_ftp_services_are_checked():
+    handler, commands = fake_ftp(ALLOWED)
+    assert run_checks(handler, name="ssh").findings == []
+    assert commands == []
+
+
+def test_closed_services_are_skipped():
+    handler, commands = fake_ftp(ALLOWED)
+    assert run_checks(handler, state="closed").findings == []
+    assert commands == []
+
+
+def test_implicit_tls():
+    handler, commands = fake_ftp(ALLOWED)
+    assert run_checks(handler, name="ftp", tls=True).findings == [FTP_ANONYMOUS]
+    assert commands == [USER, PASS, QUIT]
+
+
+def test_server_that_hangs_gives_no_finding():
+    async def hang(reader, writer):
+        writer.write(b"220 Welcome\r\n")
+        await writer.drain()
+        await reader.read(1024)
+        await asyncio.sleep(1)
+        writer.close()
+
+    assert run_checks(hang, timeout=0.1).findings == []
+
+
+def test_slow_drip_server_is_cut_off():
+    # Keeps a check alive with a new line just inside each timeout; BUDGET ends it.
+    async def drip(reader, writer):
+        try:
+            writer.write(b"220-Welcome\r\n")
+            for _ in range(100):
+                await asyncio.sleep(0.05)
+                writer.write(b"220-more\r\n")
+                await writer.drain()
+        except OSError:
+            pass
+        finally:
+            writer.close()
+
+    assert run_checks(drip, timeout=0.1).findings == []
+
+
+def test_huge_line_without_newline_gives_no_finding():
+    async def flood(reader, writer):
+        try:
+            writer.write(b"220" + b"A" * 100_000)
+            await writer.drain()
+        except OSError:
+            pass
+        finally:
+            writer.close()
+
+    assert run_checks(flood).findings == []
+
+
+def test_unreachable_service_gives_no_finding():
+    svc = Service("127.0.0.1", 1, "tcp", "open", name="ftp")
+    asyncio.run(misconfig._run_checks([svc], concurrency=1, timeout=0.05))
+    assert svc.findings == []
+
+
+# --- wiring and output --------------------------------------------------------
+
+
+def test_only_karen_mode_runs_checks(monkeypatch):
+    calls = []
+    monkeypatch.setattr(own_scanner.connect_scan, "scan", lambda *a, **k: [])
+    monkeypatch.setattr(own_scanner.probes, "add_banners", lambda s, **k: s)
+    monkeypatch.setattr(own_scanner.http_info, "add_http_info", lambda s, **k: s)
+    monkeypatch.setattr(own_scanner.tls_info, "add_tls_info", lambda s, **k: s)
+    monkeypatch.setattr(misconfig, "add_findings", lambda s, **k: calls.append(1) or s)
+
+    own_scanner.run_scan(["127.0.0.1"], [21])
+    assert calls == []
+    own_scanner.run_scan(["127.0.0.1"], [21], karen_mode=True)
+    assert calls == [1]
+
+
+def _confirmed_service() -> Service:
+    return Service("10.0.0.5", 21, "tcp", "open", name="ftp", findings=[FTP_ANONYMOUS])
+
+
+def test_table_shows_confirmed_with_why_and_fix(monkeypatch):
+    monkeypatch.setattr(own_scanner, "run_scan", lambda *a, **k: [_confirmed_service()])
+    result = CliRunner().invoke(app, ["scan", "10.0.0.5", "-p", "21"])
+    assert result.exit_code == 0, result.output
+    assert "model not trained" not in result.stdout
+    assert result.stdout.count("CONFIRMED") == 2  # the Risk column and the details
+    assert "10.0.0.5:21 Anonymous FTP login allowed" in result.stdout
+    assert "Why:" in result.stdout and "anonymous_enable=NO" in result.stdout
+
+
+def test_json_has_findings(monkeypatch):
+    monkeypatch.setattr(own_scanner, "run_scan", lambda *a, **k: [_confirmed_service()])
+    result = CliRunner().invoke(app, ["scan", "10.0.0.5", "-p", "21", "--json"])
+    finding = json.loads(result.stdout)[0]["findings"][0]
+    assert finding["check"] == "ftp-anonymous" and finding["status"] == "CONFIRMED"
+    assert finding["why"] and finding["fix"]
+
+
+def test_full_scan_finds_anonymous_ftp():
+    """The real command, from finding the port to CONFIRMED, against a threaded fake server."""
+    logins = []
+
+    class Ftp(socketserver.StreamRequestHandler):
+        def handle(self):
+            try:
+                self.wfile.write(b"220 (vsFTPd 2.3.4)\r\n")
+                for line in self.rfile:
+                    command = line.strip()
+                    if command == USER:
+                        self.wfile.write(b"331 Please specify the password.\r\n")
+                    elif command == PASS:
+                        logins.append(command)
+                        self.wfile.write(b"230 Login successful.\r\n")
+                    else:
+                        self.wfile.write(b"221 Goodbye.\r\n")
+                        return
+            except OSError:
+                pass
+
+    with socketserver.ThreadingTCPServer(("127.0.0.1", 0), Ftp) as server:
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        port = server.server_address[1]
+        result = CliRunner().invoke(
+            app, ["scan", "127.0.0.1", "-p", str(port), "--karen-mode", "--json", "-t", "5"]
+        )
+        server.shutdown()
+
+    assert result.exit_code == 0, result.output
+    [svc] = json.loads(result.stdout)
+    assert (svc["name"], svc["product"], svc["version"]) == ("ftp", "vsftpd", "2.3.4")
+    assert [f["check"] for f in svc["findings"]] == ["ftp-anonymous"]
+    assert logins == [PASS]  # logged in exactly once

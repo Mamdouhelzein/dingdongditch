@@ -8,6 +8,17 @@ from pathlib import Path
 from typing import IO
 
 
+@dataclass(frozen=True)
+class Finding:
+    """A misconfiguration we proved, rather than a risk we predicted."""
+
+    check: str  # short id, e.g. "ftp-anonymous"
+    title: str
+    why: str
+    fix: str
+    status: str = "CONFIRMED"
+
+
 @dataclass
 class Service:
     host: str
@@ -26,6 +37,7 @@ class Service:
     tls_cert: dict = field(default_factory=dict)  # Karen mode: see tls_info.describe_cert
     os_guess: str = ""  # Karen mode: best guess for this host's OS, from os_guess.py
     os_evidence: list[str] = field(default_factory=list)  # the clues behind that guess
+    findings: list[Finding] = field(default_factory=list)  # Karen mode: see misconfig.py
 
     @property
     def label(self) -> str:
