@@ -10,8 +10,9 @@ from typer.testing import CliRunner
 
 from dingdongditch import misconfig, own_scanner
 from dingdongditch.cli import app
-from dingdongditch.misconfig import FTP_ANONYMOUS
+from dingdongditch.misconfig import FTP_ANONYMOUS, REDIS_NO_PASSWORD
 from dingdongditch.nmap_parser import Service
+from dingdongditch.probes import clean_banner
 
 FIXTURES = Path(__file__).parent / "fixtures"
 USER = b"USER anonymous"
@@ -252,3 +253,89 @@ def test_full_scan_finds_anonymous_ftp():
     assert (svc["name"], svc["product"], svc["version"]) == ("ftp", "vsftpd", "2.3.4")
     assert [f["check"] for f in svc["findings"]] == ["ftp-anonymous"]
     assert logins == [PASS]  # logged in exactly once
+
+
+# --- Redis with no password ---------------------------------------------------
+
+
+def redis(banner: bytes, name: str = "redis") -> Service:
+    svc = Service("10.0.0.5", 6379, "tcp", "open", name=name, banner=clean_banner(banner))
+    asyncio.run(misconfig._run_checks([svc], concurrency=1, timeout=0.1))
+    return svc
+
+
+OPEN_REDIS = b"$3197\r\n# Server\r\nredis_version:5.0.7\r\nredis_mode:standalone\r\n"
+
+
+def test_redis_answering_info_is_confirmed():
+    assert redis(OPEN_REDIS).findings == [REDIS_NO_PASSWORD]
+
+
+@pytest.mark.parametrize("banner", [
+    b"-NOAUTH Authentication required.\r\n",
+    b"-DENIED Redis is running in protected mode because protected mode is enabled\r\n",
+    b"-ERR unknown command `INFO`\r\n",
+    b"",
+    # The words alone prove nothing: this isn't an answer to INFO.
+    b"HTTP/1.1 200 OK\r\n\r\nredis_version:5.0.7\r\n",
+    b"redis_version:5.0.7\r\n",
+])
+def test_redis_without_proof_is_not_a_finding(banner):
+    assert redis(banner).findings == []
+
+
+def test_redis_check_only_runs_on_redis():
+    assert redis(OPEN_REDIS, name="http").findings == []
+
+
+def test_redis_check_sends_nothing():
+    # Unreachable address on purpose: the proof must come from the banner alone.
+    svc = Service("127.0.0.1", 1, "tcp", "open", name="redis", banner=clean_banner(OPEN_REDIS))
+    asyncio.run(misconfig._run_checks([svc], concurrency=1, timeout=0.05))
+    assert svc.findings == [REDIS_NO_PASSWORD]
+
+
+def run_fake_redis(reply_to_info: bytes) -> tuple[dict, list[bytes]]:
+    """The real command in Karen mode against a threaded fake Redis on an unusual port."""
+    received = []
+
+    class Redis(socketserver.StreamRequestHandler):
+        def handle(self):
+            try:
+                for line in self.rfile:
+                    received.append(line.strip())
+                    if line.startswith(b"INFO server"):
+                        self.wfile.write(reply_to_info)
+                    elif not line.strip():
+                        continue
+                    else:
+                        self.wfile.write(b"-ERR unknown command\r\n")
+            except OSError:
+                pass
+
+    with socketserver.ThreadingTCPServer(("127.0.0.1", 0), Redis) as server:
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        port = server.server_address[1]
+        result = CliRunner().invoke(
+            app, ["scan", "127.0.0.1", "-p", str(port), "--karen-mode", "--json", "-t", "5"]
+        )
+        server.shutdown()
+    assert result.exit_code == 0, result.output
+    return json.loads(result.stdout)[0], received
+
+
+def test_full_scan_finds_open_redis_on_unusual_port():
+    svc, received = run_fake_redis(OPEN_REDIS)
+    assert (svc["name"], svc["product"], svc["version"]) == ("redis", "Redis", "5.0.7")
+    assert [f["check"] for f in svc["findings"]] == ["redis-no-password"]
+    # Karen mode's probes reach it (HTTP, a TLS hello, INFO), but no real data command does.
+    assert received.count(b"INFO server") == 1
+    for command in (b"AUTH", b"SET", b"GET", b"KEYS", b"SCAN", b"CONFIG", b"FLUSHALL", b"SAVE"):
+        assert not [line for line in received if line.upper().startswith(command + b" ")]
+
+
+def test_full_scan_with_password_set_reports_nothing():
+    svc, _ = run_fake_redis(b"-NOAUTH Authentication required.\r\n")
+    assert (svc["name"], svc["product"]) == ("redis", "Redis")
+    assert svc["findings"] == []

@@ -22,6 +22,16 @@ FTP_ANONYMOUS = Finding(
     why="Anyone can log in to this FTP server without an account.",
     fix="Disable anonymous access, e.g. anonymous_enable=NO in vsftpd.conf.",
 )
+REDIS_NO_PASSWORD = Finding(
+    check="redis-no-password",
+    title="Redis with no password",
+    why="Anyone who can reach this port can read and change all its data, "
+    "which is often enough to take over the server.",
+    fix="Set a password (requirepass in redis.conf), and bind Redis to localhost "
+    "or a private network.",
+)
+
+_REDIS_VERSION = re.compile(r"^redis_version:\d", re.MULTILINE)
 
 
 async def _ftp_reply(reader: asyncio.StreamReader, timeout: float) -> str:
@@ -75,11 +85,22 @@ async def check_anonymous_ftp(svc: Service, timeout: float) -> Finding | None:
             await asyncio.wait_for(writer.wait_closed(), 1.0)
 
 
+async def check_redis_no_password(svc: Service, timeout: float) -> Finding | None:
+    """No traffic needed: banner grabbing already sent the read-only INFO server.
+
+    Redis only answers that without a password if none is required. A real
+    answer is a bulk reply ("$<length>") containing the version line.
+    """
+    proved = svc.banner.startswith("$") and _REDIS_VERSION.search(svc.banner)
+    return REDIS_NO_PASSWORD if proved else None
+
+
 Check = Callable[[Service, float], Awaitable["Finding | None"]]
 
 # Service name -> checks to run on it.
 CHECKS: dict[str, list[Check]] = {
     "ftp": [check_anonymous_ftp],
+    "redis": [check_redis_no_password],
 }
 
 
