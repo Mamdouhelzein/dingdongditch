@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 
-from dingdongditch import connect_scan, http_info, probes
+from dingdongditch import connect_scan, http_info, probes, tls_info
 from dingdongditch.fingerprints import fingerprint
 from dingdongditch.nmap_parser import Service
 from dingdongditch.ports import PROFILES, parse_ports
@@ -45,7 +45,8 @@ def run_scan(
     """Scan `hosts` x `ports` and return the identified open services.
 
     `karen_mode` sends extra probes to ports the first probe didn't identify,
-    and fetches web ports' home pages for their title, headers and app.
+    fetches web ports' home pages for their title, headers and app, and reads
+    TLS certificates.
     Callbacks (for progress display): `on_result()` after each port check,
     `on_slowdown(n)` if the OS forces fewer connections, and
     `on_identify(n_open)` when banner grabbing starts.
@@ -61,4 +62,5 @@ def run_scan(
     services = fingerprint(services)
     if karen_mode:
         services = http_info.add_http_info(services, concurrency=grab_concurrency)
+        services = tls_info.add_tls_info(services, concurrency=grab_concurrency)
     return services

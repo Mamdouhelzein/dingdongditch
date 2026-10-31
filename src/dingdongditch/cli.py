@@ -75,6 +75,12 @@ def _report(services: list[Service], as_json: bool) -> None:
         product = escape(s.label)
         if s.http_title:
             product += f"\n[dim]{escape(s.http_title)}[/dim]"
+        if s.tls_cert:
+            cert = s.tls_cert
+            product += f"\n[dim]cert: {escape(cert['subject'] or '?')}, "
+            product += f"until {escape(cert['not_after'])}[/dim]"
+            if cert["problems"]:
+                product += f"\n[yellow]{escape(', '.join(cert['problems']))}[/yellow]"
         table.add_row(s.host, f"{s.port}/{s.protocol}", escape(s.name), product, risk)
     console.print(table)
 

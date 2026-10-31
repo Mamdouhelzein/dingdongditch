@@ -23,6 +23,7 @@ class Service:
     tls: bool = False  # the service spoke TLS (nmap: tunnel="ssl")
     http_title: str = ""  # Karen mode: <title> of the home page
     http_headers: dict[str, str] = field(default_factory=dict)  # Karen mode: telling headers
+    tls_cert: dict = field(default_factory=dict)  # Karen mode: see tls_info.describe_cert
 
     @property
     def label(self) -> str:

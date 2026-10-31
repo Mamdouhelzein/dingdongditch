@@ -28,6 +28,7 @@ dependencies = [
     "joblib>=1.3",
     "packaging>=23",
     "rapidfuzz>=3.0",
+    "cryptography>=42",  # reading TLS certificates (--karen-mode)
 ]
 
 [project.optional-dependencies]
