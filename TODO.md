@@ -20,7 +20,7 @@ Tick a box (`[x]`) when a step is done and committed.
 ## Safe misconfiguration checks (show CONFIRMED)
 - [x] 12. Anonymous FTP login allowed
 - [x] 13. Redis with no password
-- [ ] 14. MongoDB with no auth
+- [x] 14. MongoDB with no auth
 - [ ] 15. Telnet open
 
 ## Wrap up Part 1

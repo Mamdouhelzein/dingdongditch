@@ -11,7 +11,7 @@ import contextlib
 import re
 from collections.abc import Awaitable, Callable, Iterable
 
-from dingdongditch import probes
+from dingdongditch import mongo_wire, probes
 from dingdongditch.nmap_parser import Finding, Service
 
 BUDGET = 3  # a whole check gets this many timeouts, so a slow server can't hold us up
@@ -31,7 +31,17 @@ REDIS_NO_PASSWORD = Finding(
     "or a private network.",
 )
 
+MONGODB_NO_AUTH = Finding(
+    check="mongodb-no-auth",
+    title="MongoDB with no authentication",
+    why="Anyone who can reach this port can read and change every database.",
+    fix="Turn on access control (security.authorization: enabled in mongod.conf), "
+    "and bind MongoDB to localhost or a private network.",
+)
+
 _REDIS_VERSION = re.compile(r"^redis_version:\d", re.MULTILINE)
+_MONGO_VERSION = re.compile(r"\d+(?:\.\d+)+[\w.-]*")
+_NO_SUCH_DATABASE = "dingdongditch-no-such-database"
 
 
 async def _ftp_reply(reader: asyncio.StreamReader, timeout: float) -> str:
@@ -95,12 +105,68 @@ async def check_redis_no_password(svc: Service, timeout: float) -> Finding | Non
     return REDIS_NO_PASSWORD if proved else None
 
 
+async def check_mongodb_no_auth(svc: Service, timeout: float) -> Finding | None:
+    """Ask MongoDB for something that needs a login, in a way that returns no data.
+
+    authorizedDatabases=false makes a client without the right get an error
+    instead of an empty list, and the filter matches no real database, so an
+    open server has nothing to send back on versions that support it. Older ones
+    ignore both and may send names, which decode_doc skips and never keeps.
+    Along the way we learn the version, which doesn't need a login.
+    """
+    reader, writer = await asyncio.wait_for(
+        asyncio.open_connection(
+            svc.host, svc.port, ssl=probes.tls_context() if svc.tls else None,
+            limit=probes.MAX_BYTES,
+        ),
+        timeout,
+    )
+
+    async def ask(message: bytes, request_id: int) -> tuple[dict, bool]:
+        writer.write(message)
+        await writer.drain()
+        return await mongo_wire.read_reply(reader, request_id, timeout, probes.MAX_BYTES)
+
+    try:
+        hello, _ = await ask(mongo_wire.op_query({"isMaster": 1}, 1), 1)
+        wire_version = hello.get("maxWireVersion")
+        if hello.get("ok") != 1 or not isinstance(wire_version, int):
+            return None  # not MongoDB: stop here
+        modern = wire_version >= mongo_wire.FIRST_OP_MSG_WIRE_VERSION
+        build = mongo_wire.op_msg if modern else mongo_wire.op_query
+
+        command = {
+            "listDatabases": 1,
+            "nameOnly": True,
+            "authorizedDatabases": False,
+            "filter": {"name": _NO_SUCH_DATABASE},
+        }
+        answer, complete = await ask(build(command, 2), 2)
+        no_auth = complete and answer.get("ok") == 1 and "databases" in answer
+
+        svc.product = "MongoDB"
+        # Last, because a long reply is cut off at our read limit (the version comes
+        # first), and failing here must not undo what we've already proved.
+        with contextlib.suppress(*probes.TIMEOUT_ERRORS, OSError, ValueError, EOFError):
+            info, _ = await ask(build({"buildInfo": 1}, 3), 3)
+            version = info.get("version")
+            if isinstance(version, str) and _MONGO_VERSION.fullmatch(version):
+                svc.version = version
+                svc.cpes = [f"cpe:/a:mongodb:mongodb:{version}"]
+        return MONGODB_NO_AUTH if no_auth else None
+    finally:
+        writer.close()
+        with contextlib.suppress(*probes.TIMEOUT_ERRORS, OSError):
+            await asyncio.wait_for(writer.wait_closed(), 1.0)
+
+
 Check = Callable[[Service, float], Awaitable["Finding | None"]]
 
 # Service name -> checks to run on it.
 CHECKS: dict[str, list[Check]] = {
     "ftp": [check_anonymous_ftp],
     "redis": [check_redis_no_password],
+    "mongodb": [check_mongodb_no_auth],
 }
 
 
@@ -111,7 +177,7 @@ async def _run_checks(services: list[Service], concurrency: int, timeout: float)
         async with sem:
             try:
                 finding = await asyncio.wait_for(check(svc, timeout), timeout * BUDGET)
-            except (*probes.TIMEOUT_ERRORS, OSError, ValueError):
+            except (*probes.TIMEOUT_ERRORS, OSError, ValueError, EOFError):
                 return  # couldn't prove it, so don't claim it
         if finding:
             svc.findings.append(finding)

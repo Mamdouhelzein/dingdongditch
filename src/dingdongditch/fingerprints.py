@@ -164,6 +164,8 @@ def identify(banner: str) -> Fingerprint | None:
     """Work out what a service is from its banner, or None if we can't tell."""
     if not banner:
         return None
+    if "access MongoDB over HTTP" in banner:  # MongoDB's HTTP-looking answer to our HEAD
+        return Fingerprint("mongodb", "MongoDB", cpes=["cpe:/a:mongodb:mongodb"])
     if re.match(r"HTTP/\d(?:\.\d)? \d{3}", banner):
         return _identify_http(banner)
     for rule in RULES:
