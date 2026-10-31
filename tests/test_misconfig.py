@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 from dingdongditch import misconfig, own_scanner
 from dingdongditch.cli import app
-from dingdongditch.misconfig import FTP_ANONYMOUS, REDIS_NO_PASSWORD
+from dingdongditch.misconfig import FTP_ANONYMOUS, REDIS_NO_PASSWORD, TELNET_OPEN
 from dingdongditch.nmap_parser import Service
 from dingdongditch.probes import clean_banner
 
@@ -339,3 +339,72 @@ def test_full_scan_with_password_set_reports_nothing():
     svc, _ = run_fake_redis(b"-NOAUTH Authentication required.\r\n")
     assert (svc["name"], svc["product"]) == ("redis", "Redis")
     assert svc["findings"] == []
+
+
+# --- telnet ---------------------------------------------------------------------
+
+
+def telnet(banner: bytes, name: str = "telnet", tls: bool = False) -> Service:
+    # Unreachable address on purpose: the proof must come from the banner alone.
+    svc = Service("127.0.0.1", 1, "tcp", "open", name=name, tls=tls,
+                  banner=clean_banner(banner))
+    asyncio.run(misconfig._run_checks([svc], concurrency=1, timeout=0.05))
+    return svc
+
+
+@pytest.mark.parametrize("banner", [
+    b"\xff\xfd\x18\xff\xfd\x20\xff\xfd\x23",   # DO terminal type, ...
+    b"\xff\xfb\x01\xff\xfb\x03",               # WILL echo, ...
+    b"Ubuntu 18.04 LTS\r\nmetasploitable login: ",
+    b"Username: ",
+    b"Password:",
+])
+def test_telnet_confirmed(banner):
+    assert telnet(banner).findings == [TELNET_OPEN]
+
+
+@pytest.mark.parametrize("banner", [
+    b"",                       # a silent port 23 could be anything
+    b"Welcome to my service\r\n",
+    b"please login: now\r\n",  # the words, but it isn't a prompt
+])
+def test_telnet_without_proof_is_not_a_finding(banner):
+    assert telnet(banner).findings == []
+
+
+def test_telnet_inside_tls_is_not_cleartext():
+    assert telnet(b"\xff\xfd\x18", tls=True).findings == []
+
+
+def test_login_prompt_elsewhere_is_not_telnet():
+    assert telnet(b"Username: ", name="http").findings == []
+
+
+def test_full_scan_finds_telnet_and_sends_it_nothing():
+    received = []
+
+    class Telnet(socketserver.StreamRequestHandler):
+        def handle(self):
+            try:
+                self.wfile.write(b"\xff\xfd\x18\xff\xfd\x20")
+                self.connection.settimeout(0.5)
+                data = self.connection.recv(1024)
+                if data:
+                    received.append(data)
+            except OSError:
+                pass
+
+    with socketserver.ThreadingTCPServer(("127.0.0.1", 0), Telnet) as server:
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        port = server.server_address[1]
+        result = CliRunner().invoke(
+            app, ["scan", "127.0.0.1", "-p", str(port), "--karen-mode", "--json", "-t", "5"]
+        )
+        server.shutdown()
+
+    assert result.exit_code == 0, result.output
+    [svc] = json.loads(result.stdout)
+    assert svc["name"] == "telnet"
+    assert [f["check"] for f in svc["findings"]] == ["telnet-open"]
+    assert received == []  # no login attempt, not even a reply to its negotiation

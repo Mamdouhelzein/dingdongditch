@@ -12,6 +12,7 @@ import re
 from collections.abc import Awaitable, Callable, Iterable
 
 from dingdongditch import mongo_wire, probes
+from dingdongditch.fingerprints import identify
 from dingdongditch.nmap_parser import Finding, Service
 
 BUDGET = 3  # a whole check gets this many timeouts, so a slow server can't hold us up
@@ -38,7 +39,15 @@ MONGODB_NO_AUTH = Finding(
     fix="Turn on access control (security.authorization: enabled in mongod.conf), "
     "and bind MongoDB to localhost or a private network.",
 )
+TELNET_OPEN = Finding(
+    check="telnet-open",
+    title="Telnet open",
+    why="Telnet sends passwords and everything else unencrypted, so anyone on the "
+    "network path can read them.",
+    fix="Turn telnet off and use SSH instead.",
+)
 
+_LOGIN_PROMPT = re.compile(r"(?:login|username|password)\s*:\s*$", re.IGNORECASE)
 _REDIS_VERSION = re.compile(r"^redis_version:\d", re.MULTILINE)
 _MONGO_VERSION = re.compile(r"\d+(?:\.\d+)+[\w.-]*")
 _NO_SUCH_DATABASE = "dingdongditch-no-such-database"
@@ -160,6 +169,19 @@ async def check_mongodb_no_auth(svc: Service, timeout: float) -> Finding | None:
             await asyncio.wait_for(writer.wait_closed(), 1.0)
 
 
+async def check_telnet_open(svc: Service, timeout: float) -> Finding | None:
+    """No traffic needed, and no login: the greeting we already have is the proof.
+
+    The name alone isn't, because a silent port 23 gets called telnet by default.
+    It takes telnet's negotiation bytes, or a login prompt.
+    """
+    if svc.tls:
+        return None  # the problem is cleartext
+    fingerprint = identify(svc.banner)
+    negotiated = fingerprint is not None and fingerprint.name == "telnet"
+    return TELNET_OPEN if negotiated or _LOGIN_PROMPT.search(svc.banner) else None
+
+
 Check = Callable[[Service, float], Awaitable["Finding | None"]]
 
 # Service name -> checks to run on it.
@@ -167,6 +189,7 @@ CHECKS: dict[str, list[Check]] = {
     "ftp": [check_anonymous_ftp],
     "redis": [check_redis_no_password],
     "mongodb": [check_mongodb_no_auth],
+    "telnet": [check_telnet_open],
 }
 
 
