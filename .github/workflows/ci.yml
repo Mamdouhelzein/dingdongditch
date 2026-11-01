@@ -27,12 +27,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Lint
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y mandoc
-          mandoc -T lint -W warning man/dingdongditch.1
       - name: Installs with pipx
         run: |
           pipx install .
           test -e "$HOME/.local/share/man/man1/dingdongditch.1"
+      - name: Lint
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mandoc
+          mandoc -T lint -W warning man/dingdongditch.1 2>&1 | sed 's/^/::error::/'
+          test "${PIPESTATUS[0]}" -eq 0
