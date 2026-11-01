@@ -25,7 +25,7 @@ from dingdongditch import __version__, nmap_scanner, own_scanner
 from dingdongditch.connect_scan import (
     DEFAULT_CONCURRENCY,
     DEFAULT_TIMEOUT,
-    KAREN_MODE_CONCURRENCY,
+    Recheck,
 )
 from dingdongditch.nmap_parser import Service, parse_nmap_xml
 from dingdongditch.nmap_scanner import PROFILES, NmapNotFoundError
@@ -110,17 +110,16 @@ class Engine(str, Enum):
 
 def _scan_own(
     targets: list[str], profile: str, ports: str | None, karen_mode: bool,
-    timeout: float, concurrency: int | None,
+    timeout: float, concurrency: int,
 ) -> list[Service]:
     hosts, port_list = own_scanner.resolve(targets, profile, ports, karen_mode)
-    if concurrency is None:
-        concurrency = KAREN_MODE_CONCURRENCY if karen_mode else DEFAULT_CONCURRENCY
     total = len(hosts) * len(port_list)
     err.print(
         f"[dim]Scanning {len(hosts):,} host(s) x {len(port_list):,} port(s) "
         f"with the built-in scanner ({concurrency} at once)...[/dim]"
     )
     slowest = concurrency
+    recheck: Recheck | None = None
 
     with Progress(
         TextColumn("{task.description}"), BarColumn(), MofNCompleteColumn(),
@@ -132,6 +131,15 @@ def _scan_own(
             nonlocal slowest
             slowest = min(slowest, n)
 
+        def on_recheck(update: Recheck) -> None:
+            nonlocal recheck
+            recheck = update
+            if update.status == "started":
+                progress.update(
+                    task, description=f"Rechecking {update.timed_out:,} port(s) that timed out",
+                    total=None,
+                )
+
         def on_identify(n_open: int) -> None:
             progress.update(task, description=f"Asking {n_open} open port(s) what they are",
                             total=None)
@@ -140,6 +148,18 @@ def _scan_own(
             hosts, port_list, timeout=timeout, concurrency=concurrency,
             on_result=lambda: progress.advance(task),
             on_slowdown=on_slowdown, on_identify=on_identify, karen_mode=karen_mode,
+            on_recheck=on_recheck,
+        )
+    if recheck and recheck.status == "done":
+        err.print(
+            f"[dim]Rechecked {recheck.timed_out:,} port(s) that timed out: "
+            f"{recheck.opened:,} turned out to be open.[/dim]"
+        )
+    elif recheck and recheck.status == "skipped":
+        err.print(
+            f"[yellow]{recheck.timed_out:,} ports timed out, too many to recheck. That's normal "
+            "behind a firewall, but with no firewall, open ports may be missing: "
+            "try -c 100 -t 3.[/yellow]"
         )
     if slowest < concurrency:
         err.print(
@@ -183,16 +203,15 @@ def scan(
     karen_mode: bool = typer.Option(
         False, "--karen-mode",
         help="Demand to speak to every port's manager: all 65,535 ports unless -p is "
-        f"given, {KAREN_MODE_CONCURRENCY} connections at once.",
+        "given, plus every extra and safe check.",
     ),
     timeout: float = typer.Option(
         DEFAULT_TIMEOUT, "--timeout", "-t", min=0.05,
         help="Built-in scanner: seconds to wait for each port.",
     ),
     concurrency: int = typer.Option(
-        None, "--concurrency", "-c", min=1, show_default=False,
-        help=f"Built-in scanner: connections at once [default: {DEFAULT_CONCURRENCY}, "
-        f"{KAREN_MODE_CONCURRENCY} with --karen-mode]. Lowered automatically if the system "
+        DEFAULT_CONCURRENCY, "--concurrency", "-c", min=1,
+        help="Built-in scanner: connections at once. Lowered automatically if the system "
         "runs out of sockets.",
     ),
     save: Path = typer.Option(

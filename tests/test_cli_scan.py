@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 from dingdongditch import own_scanner
 from dingdongditch.cli import app
-from dingdongditch.connect_scan import DEFAULT_CONCURRENCY, KAREN_MODE_CONCURRENCY
+from dingdongditch.connect_scan import DEFAULT_CONCURRENCY, Recheck
 from dingdongditch.ports import PROFILES
 
 
@@ -100,16 +100,19 @@ def test_resolve_profiles_and_karen_mode():
 @pytest.fixture
 def fake_engine(monkeypatch):
     """Replace the real scan; record what the CLI asked for."""
-    seen = {"slowdown_to": None}
+    seen = {"slowdown_to": None, "recheck": []}
 
     def fake_run_scan(hosts, ports, timeout, concurrency,
-                      on_result=None, on_slowdown=None, on_identify=None, karen_mode=False):
+                      on_result=None, on_slowdown=None, on_identify=None, karen_mode=False,
+                      on_recheck=None):
         seen.update(hosts=hosts, ports=ports, timeout=timeout, concurrency=concurrency,
                     karen_mode=karen_mode)
         for _ in range(3):
             on_result()
         if seen["slowdown_to"]:
             on_slowdown(seen["slowdown_to"])
+        for update in seen["recheck"]:
+            on_recheck(update)
         on_identify(0)
         return []
 
@@ -128,7 +131,7 @@ def test_options_reach_the_scanner(fake_engine):
 
 @pytest.mark.parametrize("args, expected", [
     ([], DEFAULT_CONCURRENCY),
-    (["--karen-mode"], KAREN_MODE_CONCURRENCY),
+    (["--karen-mode"], DEFAULT_CONCURRENCY),
 ])
 def test_default_concurrency(fake_engine, args, expected):
     assert scan("10.0.0.1", *args).exit_code == 0
@@ -141,3 +144,22 @@ def test_tells_you_when_it_slowed_down(fake_engine):
     result = scan("10.0.0.1", "--karen-mode")
     assert result.exit_code == 0
     assert "slowed down to about 300" in result.output and "-c 300" in result.output
+
+
+def test_reports_ports_found_on_the_second_try(fake_engine):
+    fake_engine["recheck"] = [Recheck("started", 40), Recheck("done", 40, 18)]
+    result = scan("10.0.0.1")
+    assert result.exit_code == 0, result.output
+    assert "40 port(s) that timed out: 18 turned out" in " ".join(result.output.split())
+
+
+def test_warns_when_too_many_timed_out_to_recheck(fake_engine):
+    fake_engine["recheck"] = [Recheck("skipped", 60000)]
+    result = scan("10.0.0.1")
+    assert result.exit_code == 0, result.output
+    text = " ".join(result.output.split())
+    assert "60,000 ports timed out" in text and "-c 100 -t 3" in text
+
+
+def test_no_recheck_message_when_nothing_timed_out(fake_engine):
+    assert "Rechecked" not in scan("10.0.0.1").output

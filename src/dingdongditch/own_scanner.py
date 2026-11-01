@@ -42,6 +42,7 @@ def run_scan(
     on_slowdown: Callable[[int], None] | None = None,
     on_identify: Callable[[int], None] | None = None,
     karen_mode: bool = False,
+    on_recheck: Callable[[connect_scan.Recheck], None] | None = None,
 ) -> list[Service]:
     """Scan `hosts` x `ports` and return the identified open services.
 
@@ -49,12 +50,13 @@ def run_scan(
     fetches web ports' home pages for their title, headers and app, reads TLS
     certificates, guesses each host's OS, and runs the safe misconfiguration checks.
     Callbacks (for progress display): `on_result()` after each port check,
-    `on_slowdown(n)` if the OS forces fewer connections, and
-    `on_identify(n_open)` when banner grabbing starts.
+    `on_slowdown(n)` if the OS forces fewer connections, `on_recheck(Recheck)`
+    for the second try at ports that timed out, and `on_identify(n_open)` when
+    banner grabbing starts.
     """
     services = connect_scan.scan(
         hosts, ports, timeout=timeout, concurrency=concurrency,
-        on_result=on_result, on_slowdown=on_slowdown,
+        on_result=on_result, on_slowdown=on_slowdown, on_recheck=on_recheck,
     )
     if on_identify:
         on_identify(len(services))

@@ -5,7 +5,15 @@ import socket
 import pytest
 
 from dingdongditch import connect_scan
-from dingdongditch.connect_scan import CLOSED, FILTERED, OPEN, check_port, scan, scan_async
+from dingdongditch.connect_scan import (
+    CLOSED,
+    FILTERED,
+    OPEN,
+    Recheck,
+    check_port,
+    scan,
+    scan_async,
+)
 
 # Windows waits ~2s before reporting a refused localhost connection.
 SLOW_OK = 5.0
@@ -195,3 +203,136 @@ def test_raise_open_file_limit_without_resource(monkeypatch):
 
     monkeypatch.setattr(builtins, "__import__", no_resource)
     assert connect_scan.raise_open_file_limit(2000) is None
+
+
+# --- second try for ports that timed out ------------------------------------
+
+
+class Target:
+    """Fake target: open_ports answer, except those in `late`, which time out once."""
+
+    def __init__(self, open_ports=(), late=(), silent=()):
+        self.open_ports, self.late, self.silent = set(open_ports), set(late), set(silent)
+        self.calls: list[int] = []
+        self.in_flight = self.peak = 0
+
+    async def __call__(self, host, port):
+        self.calls.append(port)
+        self.in_flight += 1
+        self.peak = max(self.peak, self.in_flight)
+        try:
+            if port in self.silent or (port in self.late and self.calls.count(port) == 1):
+                await asyncio.sleep(60)
+            await asyncio.sleep(0)
+            if port in self.open_ports or port in self.late:
+                return None, _FakeWriter()
+            raise ConnectionRefusedError
+        finally:
+            self.in_flight -= 1
+
+
+@pytest.fixture
+def quick_recheck(monkeypatch):
+    monkeypatch.setattr(connect_scan, "RECHECK_TIMEOUT", 0.05)
+
+
+def run_target(monkeypatch, target, ports, **kwargs):
+    monkeypatch.setattr(connect_scan.asyncio, "open_connection", target)
+    updates = []
+    kwargs.setdefault("timeout", 0.02)
+    results = asyncio.run(scan_async(["10.0.0.1"], ports, on_recheck=updates.append, **kwargs))
+    return {port: state for _, port, state in results}, updates
+
+
+def test_late_answer_is_caught_on_the_second_try(monkeypatch, quick_recheck):
+    states, updates = run_target(monkeypatch, Target(late=[21, 80]), [21, 22, 80])
+    assert states == {21: OPEN, 22: CLOSED, 80: OPEN}
+    assert updates == [Recheck("started", 2), Recheck("done", 2, 2)]
+
+
+def test_only_timed_out_ports_are_tried_again(monkeypatch, quick_recheck):
+    target = Target(open_ports=[22], late=[21], silent=[23])
+    states, _ = run_target(monkeypatch, target, [21, 22, 23, 25])
+    assert states == {21: OPEN, 22: OPEN, 23: FILTERED, 25: CLOSED}
+    assert sorted(target.calls) == [21, 21, 22, 23, 23, 25]
+
+
+def test_really_silent_port_stays_filtered(monkeypatch, quick_recheck):
+    states, updates = run_target(monkeypatch, Target(silent=[23]), [23])
+    assert states == {23: FILTERED}
+    assert updates[-1] == Recheck("done", 1, 0)
+
+
+def test_second_try_is_calmer(monkeypatch, quick_recheck):
+    monkeypatch.setattr(connect_scan, "RECHECK_CONCURRENCY", 3)
+    ports = list(range(1, 21))
+    target = Target(late=ports)
+    monkeypatch.setattr(connect_scan.asyncio, "open_connection", target)
+    peaks = []
+
+    def on_recheck(update):
+        if update.status == "started":
+            target.peak = 0  # the first pass ran 20 at once; measure only the second
+        else:
+            peaks.append(target.peak)
+
+    results = asyncio.run(
+        scan_async(["10.0.0.1"], ports, timeout=0.02, concurrency=20, on_recheck=on_recheck)
+    )
+    assert peaks == [3]
+    assert all(state == OPEN for _, _, state in results)
+
+
+def test_second_try_never_uses_more_than_the_users_concurrency(monkeypatch, quick_recheck):
+    target = Target(late=list(range(1, 11)))
+    run_target(monkeypatch, target, list(range(1, 11)), concurrency=2)
+    assert target.peak == 2
+
+
+def test_second_try_waits_longer_but_keeps_a_more_patient_timeout(monkeypatch):
+    seen = []
+
+    async def fake_check(host, port, timeout):
+        seen.append(timeout)
+        return FILTERED
+
+    monkeypatch.setattr(connect_scan, "check_port", fake_check)
+    asyncio.run(scan_async(["10.0.0.1"], [80], timeout=1.0))
+    assert seen == [1.0, connect_scan.RECHECK_TIMEOUT]
+    seen.clear()
+    asyncio.run(scan_async(["10.0.0.1"], [80], timeout=10.0))
+    assert seen == [10.0, 10.0]
+
+
+def test_too_many_timeouts_skip_the_second_try(monkeypatch, quick_recheck):
+    monkeypatch.setattr(connect_scan, "MAX_RECHECKS", 2)
+    target = Target(silent=[1, 2, 3])
+    states, updates = run_target(monkeypatch, target, [1, 2, 3])
+    assert set(states.values()) == {FILTERED}
+    assert updates == [Recheck("skipped", 3)]
+    assert sorted(target.calls) == [1, 2, 3]
+
+
+def test_exactly_at_the_limit_still_rechecks(monkeypatch, quick_recheck):
+    monkeypatch.setattr(connect_scan, "MAX_RECHECKS", 2)
+    _, updates = run_target(monkeypatch, Target(silent=[1, 2]), [1, 2])
+    assert updates[0] == Recheck("started", 2)
+
+
+def test_nothing_timed_out_means_no_second_try(monkeypatch, quick_recheck):
+    target = Target(open_ports=[22])
+    states, updates = run_target(monkeypatch, target, [22, 23])
+    assert states == {22: OPEN, 23: CLOSED}
+    assert updates == [] and sorted(target.calls) == [22, 23]
+
+
+def test_progress_counts_each_port_once(monkeypatch, quick_recheck):
+    done = []
+    run_target(monkeypatch, Target(late=[21]), [21, 22], on_result=lambda: done.append(1))
+    assert len(done) == 2
+
+
+def test_scan_reports_the_recovered_port_as_a_service(monkeypatch, quick_recheck):
+    monkeypatch.setattr(connect_scan.asyncio, "open_connection", Target(late=[21]))
+    services = scan(["10.0.0.1"], [21, 22], timeout=0.02)
+    assert [(s.port, s.state, s.name) for s in services] == [(21, OPEN, "ftp")]
