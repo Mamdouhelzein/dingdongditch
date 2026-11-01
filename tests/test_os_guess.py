@@ -20,6 +20,7 @@ def guess(*services) -> Service:
     (b"SSH-2.0-OpenSSH_7.4p1 Debian-10+deb9u7\r\n", "Debian 9"),
     (b"SSH-2.0-OpenSSH_7.4p1 Debian-3\r\n", "Debian"),
     (b"SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.5\r\n", "Ubuntu"),
+    (b"SSH-2.0-OpenSSH_4.7p1 Debian-8ubuntu1\n", "Ubuntu"),  # real, from Metasploitable 2
     (b"SSH-2.0-OpenSSH_7.8 FreeBSD-20180909\r\n", "FreeBSD"),
     (b"SSH-2.0-OpenSSH_for_Windows_8.1\r\n", "Windows"),
     (b"HTTP/1.1 200 OK\r\nServer: Apache/2.4.29 (Ubuntu)\r\n\r\n", "Ubuntu"),

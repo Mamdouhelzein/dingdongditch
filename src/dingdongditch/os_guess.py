@@ -34,8 +34,9 @@ def _rule(regex: str, distro: str, family: str = "Linux") -> tuple[re.Pattern[st
 # Most specific first; each service gives one clue, from the first rule that matches.
 RULES = [
     _rule(r"\+deb(?P<version>\d+)u\d+", "Debian"),  # 10+deb9u7 is Debian 9's package
-    _rule(r"\bDebian\b", "Debian"),
+    # Before Debian: Ubuntu's packages can say both, as in "Debian-8ubuntu1".
     _rule(r"\bUbuntu\b|\dubuntu\d", "Ubuntu"),
+    _rule(r"\bDebian\b", "Debian"),
     _rule(r"\bCentOS\b", "CentOS"),
     _rule(r"\bRed Hat\b", "Red Hat"),
     _rule(r"\bFedora\b", "Fedora"),
