@@ -25,8 +25,8 @@ Tick a box (`[x]`) when a step is done and committed.
 
 ## Wrap up Part 1
 - [ ] 16. Test against Vulhub labs on Kali
-- [ ] 17. Update README (own scanner is default, nmap is backup)
-- [ ] 18. Push to GitHub
+- [x] 17. Update README (own scanner is default, nmap is backup) + man page
+- [x] 18. Push to GitHub
 
 ## Later bonus
 - [ ] SYN scan (needs root)
