@@ -23,6 +23,14 @@ FTP_ANONYMOUS = Finding(
     why="Anyone can log in to this FTP server without an account.",
     fix="Disable anonymous access, e.g. anonymous_enable=NO in vsftpd.conf.",
 )
+OPEN_SHELL = Finding(
+    check="open-shell",
+    title="Open shell with no login",
+    why="Anyone who connects gets a command prompt on this machine with no password. "
+    "This is usually a backdoor.",
+    fix="Find and stop whatever is listening on this port, and treat the machine "
+    "as compromised until you know how it got there.",
+)
 REDIS_NO_PASSWORD = Finding(
     check="redis-no-password",
     title="Redis with no password",
@@ -90,7 +98,8 @@ async def check_anonymous_ftp(svc: Service, timeout: float) -> Finding | None:
         return await _ftp_reply(reader, timeout)
 
     try:
-        if await _ftp_reply(reader, timeout) != "220":
+        greeting_wait = max(timeout, probes.GREETING_TIMEOUT)
+        if await _ftp_reply(reader, greeting_wait) != "220":
             return None  # not an FTP server that's ready: send it nothing
         code = await send(b"USER anonymous")
         if code == "331":
@@ -102,6 +111,12 @@ async def check_anonymous_ftp(svc: Service, timeout: float) -> Finding | None:
         writer.close()
         with contextlib.suppress(*probes.TIMEOUT_ERRORS, OSError):
             await asyncio.wait_for(writer.wait_closed(), 1.0)
+
+
+async def check_open_shell(svc: Service, timeout: float) -> Finding | None:
+    """No traffic needed, and nothing is ever typed: the prompt it sent us is the proof."""
+    fingerprint = identify(svc.banner)
+    return OPEN_SHELL if fingerprint and fingerprint.name == "bindshell" else None
 
 
 async def check_redis_no_password(svc: Service, timeout: float) -> Finding | None:
@@ -190,6 +205,7 @@ CHECKS: dict[str, list[Check]] = {
     "redis": [check_redis_no_password],
     "mongodb": [check_mongodb_no_auth],
     "telnet": [check_telnet_open],
+    "bindshell": [check_open_shell],
 }
 
 
@@ -199,7 +215,8 @@ async def _run_checks(services: list[Service], concurrency: int, timeout: float)
     async def one(svc: Service, check: Check) -> None:
         async with sem:
             try:
-                finding = await asyncio.wait_for(check(svc, timeout), timeout * BUDGET)
+                limit = timeout * BUDGET + probes.GREETING_TIMEOUT
+                finding = await asyncio.wait_for(check(svc, timeout), limit)
             except (*probes.TIMEOUT_ERRORS, OSError, ValueError, EOFError):
                 return  # couldn't prove it, so don't claim it
         if finding:

@@ -10,7 +10,12 @@ from typer.testing import CliRunner
 
 from dingdongditch import misconfig, own_scanner
 from dingdongditch.cli import app
-from dingdongditch.misconfig import FTP_ANONYMOUS, REDIS_NO_PASSWORD, TELNET_OPEN
+from dingdongditch.misconfig import (
+    FTP_ANONYMOUS,
+    OPEN_SHELL,
+    REDIS_NO_PASSWORD,
+    TELNET_OPEN,
+)
 from dingdongditch.nmap_parser import Service
 from dingdongditch.probes import clean_banner
 
@@ -18,6 +23,11 @@ FIXTURES = Path(__file__).parent / "fixtures"
 USER = b"USER anonymous"
 PASS = b"PASS anonymous@"
 QUIT = b"QUIT"
+
+
+@pytest.fixture(autouse=True)
+def short_greeting_wait(monkeypatch):
+    monkeypatch.setattr(misconfig.probes, "GREETING_TIMEOUT", 0.2)
 
 
 def fake_ftp(replies: dict[bytes, bytes], greeting: bytes = b"220 Welcome\r\n"):
@@ -408,3 +418,63 @@ def test_full_scan_finds_telnet_and_sends_it_nothing():
     assert svc["name"] == "telnet"
     assert [f["check"] for f in svc["findings"]] == ["telnet-open"]
     assert received == []  # no login attempt, not even a reply to its negotiation
+
+
+# --- slow FTP greeting and open shells ------------------------------------------
+
+
+def test_ftp_check_waits_for_a_slow_greeting(monkeypatch):
+    monkeypatch.setattr(misconfig.probes, "GREETING_TIMEOUT", 1.0)
+    handler, commands = fake_ftp(ALLOWED)
+
+    async def slow(reader, writer):
+        await asyncio.sleep(0.5)  # longer than the timeout below
+        await handler(reader, writer)
+
+    assert run_checks(slow, timeout=0.2).findings == [FTP_ANONYMOUS]
+    assert commands == [USER, PASS, QUIT]
+
+
+def shell(banner: bytes, name: str = "bindshell") -> Service:
+    # Unreachable address on purpose: the proof must come from the banner alone.
+    svc = Service("127.0.0.1", 1, "tcp", "open", name=name, banner=clean_banner(banner))
+    asyncio.run(misconfig._run_checks([svc], concurrency=1, timeout=0.05))
+    return svc
+
+
+def test_open_shell_is_confirmed():
+    assert shell(b"root@metasploitable:/# ").findings == [OPEN_SHELL]
+
+
+def test_shell_check_needs_a_real_prompt():
+    assert shell(b"hello there").findings == []
+
+
+def test_full_scan_finds_an_open_shell_and_types_nothing():
+    received = []
+
+    class Shell(socketserver.StreamRequestHandler):
+        def handle(self):
+            try:
+                self.wfile.write(b"root@metasploitable:/# ")
+                self.connection.settimeout(0.5)
+                data = self.connection.recv(1024)
+                if data:
+                    received.append(data)
+            except OSError:
+                pass
+
+    with socketserver.ThreadingTCPServer(("127.0.0.1", 0), Shell) as server:
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        port = server.server_address[1]
+        result = CliRunner().invoke(
+            app, ["scan", "127.0.0.1", "-p", str(port), "--karen-mode", "--json", "-t", "5"]
+        )
+        server.shutdown()
+
+    assert result.exit_code == 0, result.output
+    [svc] = json.loads(result.stdout)
+    assert svc["name"] == "bindshell"
+    assert [f["check"] for f in svc["findings"]] == ["open-shell"]
+    assert received == []  # not one keystroke reached the shell

@@ -47,6 +47,16 @@ CASES = [
     (b"RFB 003.008\n", "vnc", "", "", ""),
     (b"\xff\xfd\x18\xff\xfd\x20\xff\xfd\x23", "telnet", "", "", ""),
     (b"AMQP\x00\x00\x09\x01", "amqp", "", "", ""),
+    # Real banners from Metasploitable 2
+    (b">\x00\x00\x00\n5.0.51a-3ubuntu5\x00\x05\x07\x00\x00<D#~vU'_\x00",
+     "mysql", "MySQL", "5.0.51a", "cpe:/a:oracle:mysql:5.0.51a"),
+    (b"220 ProFTPD 1.3.1 Server (Debian) [::ffff:192.168.195.130]\r\n",
+     "ftp", "ProFTPD", "1.3.1", "cpe:/a:proftpd:proftpd:1.3.1"),
+    (b"\x01Where are you?\n", "exec", "netkit-rsh rexecd", "", ""),
+    (b":irc.Metasploitable.LAN NOTICE AUTH :*** Looking up your hostname...\r\n",
+     "irc", "", "", ""),
+    (b"root@metasploitable:/# ", "bindshell", "", "", ""),
+    (b"kali@lab-1:~/work$ ", "bindshell", "", "", ""),
     # HTTP/2 SETTINGS frame (seen from a real local gRPC service)
     (b"\x00\x00\x18\x04\x00\x00\x00\x00\x00\x00\x04\x00?\xff\xff\x00\x05\x00@\x00",
      "http2", "", "", ""),
@@ -128,3 +138,12 @@ def test_fingerprint_fills_services():
     assert ssh.cpes == ["cpe:/a:openbsd:openssh:8.2p1"]
     assert (web.name, web.label) == ("https", "nginx 1.18.0")
     assert (odd.name, odd.product, odd.cpes) == ("postgresql", "", [])
+
+
+@pytest.mark.parametrize("banner", [
+    "mail me at root@metasploitable:/ please",  # not on a line of its own
+    "login: root@host",
+    "user@host",
+])
+def test_things_that_only_look_like_a_shell(banner):
+    assert identify(banner) is None

@@ -21,10 +21,12 @@ from dingdongditch.ports import SERVICE_NAMES, TLS_PORTS
 
 LISTEN_TIMEOUT = 2.0      # how long to wait for a service that talks first
 TIMEOUT = 3.0             # connecting, and waiting for an answer to a probe
+GREETING_TIMEOUT = 12.0   # mail and FTP servers can stall on a lookup before saying hello
 MAX_BYTES = 4096          # never read more than this from one port
 DEFAULT_CONCURRENCY = 100  # lower than the port scan: each grab holds a connection longer
 
 _QUIET_GAP = 0.3  # once a service has started talking, stop when it pauses this long
+_SLOW_GREETERS = {"ftp", "smtp", "submission", "pop3", "imap"}
 TIMEOUT_ERRORS = (asyncio.TimeoutError, TimeoutError)
 
 # Default service names (from ports.py) that speak HTTP, so a HEAD request fits.
@@ -178,6 +180,8 @@ async def _first_try(
     use_tls = port in TLS_PORTS
     probe = probe_for(host, port)
     tried = {(use_tls, probe)}
+    if SERVICE_NAMES.get(port) in _SLOW_GREETERS:
+        listen = max(listen, GREETING_TIMEOUT)
     try:
         raw = await exchange(host, port, use_tls, probe, listen, timeout)
     except (*TIMEOUT_ERRORS, OSError):

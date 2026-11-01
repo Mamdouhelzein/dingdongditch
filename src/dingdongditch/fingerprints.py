@@ -59,7 +59,7 @@ RULES: list[Rule] = [
     # Databases and caches. MySQL's greeting: binary length, protocol 10 ("\n"), version.
     _r(r"\\x00\n5\.5\.5-" + _V + r"-MariaDB", "mysql", "MariaDB", "mariadb:mariadb"),
     _r(r"\\x00\n" + _V + r"-MariaDB", "mysql", "MariaDB", "mariadb:mariadb"),
-    _r(r"\\x00\n(?P<version>\d+\.\d+\.\d+)", "mysql", "MySQL", "oracle:mysql"),
+    _r(r"\\x00\n(?P<version>\d+\.\d+\.\d+[a-z]?)", "mysql", "MySQL", "oracle:mysql"),
     _r(r"is not allowed to connect to this M(?:ySQL|ariaDB) server", "mysql", "MySQL"),
     _r(r"^redis_version:" + _V, "redis", "Redis", "redis:redis"),
     _r(r"^-(?:NOAUTH|DENIED|ERR operation not permitted)", "redis", "Redis"),
@@ -68,13 +68,16 @@ RULES: list[Rule] = [
        "apache:activemq"),
     _r(r"\\x01ActiveMQ", "activemq", "Apache ActiveMQ", "apache:activemq"),
     _r(r"^AMQP", "amqp"),
-    # Remote access
+    # Remote access. A bare shell prompt with no login at all; it matches nothing else.
+    _r(r"^[\w.-]+@[\w.-]+:\S*[#$]$", "bindshell"),
+    _r(r"Where are you\?", "exec", "netkit-rsh rexecd"),
     _r(r"^RFB (?P<extra>\d{3}\.\d{3})", "vnc"),
     _r(r"^\\xff\\xf[b-e]", "telnet"),  # telnet option negotiation (IAC WILL/WONT/DO/DONT)
     # HTTP/2-only servers (often gRPC) open with a SETTINGS frame:
     # 3-byte length, type 0x04, flags 0, stream 0.
     _r(r"^\\x00(?:\\x[0-9a-f]{2}|.){2}\\x04\\x00\\x00\\x00\\x00\\x00", "http2"),
     # Other
+    _r(r"^:\S+ NOTICE AUTH\b", "irc"),
     _r(r"VMware Authentication Daemon Version " + _V, "vmware-auth",
        "VMware Authentication Daemon"),
 ]

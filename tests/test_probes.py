@@ -13,6 +13,11 @@ FIXTURES = Path(__file__).parent / "fixtures"
 FAST = {"listen": 0.2, "timeout": 2.0}
 
 
+@pytest.fixture(autouse=True)
+def short_greeting_wait(monkeypatch):
+    monkeypatch.setattr(probes, "GREETING_TIMEOUT", 0.2)
+
+
 def _server_tls() -> ssl.SSLContext:
     """Self-signed certificate made only for these tests."""
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -341,3 +346,40 @@ def test_tls_context_allows_old_versions_without_warning(recwarn):
     assert ctx.minimum_version == ssl.TLSVersion.TLSv1
     assert ctx.verify_mode == ssl.CERT_NONE and ctx.check_hostname is False
     assert not [w for w in recwarn if issubclass(w.category, DeprecationWarning)]
+
+
+# --- slow greetings -------------------------------------------------------
+
+
+def greets_after(delay: float, banner: bytes):
+    async def handler(reader, writer):
+        await asyncio.sleep(delay)
+        writer.write(banner)
+        await writer.drain()
+        writer.close()
+
+    return handler
+
+
+def test_mail_and_ftp_ports_get_longer_to_say_hello(monkeypatch):
+    monkeypatch.setattr(probes, "GREETING_TIMEOUT", 1.0)
+    banner = run_with_server(
+        greets_after(0.5, b"220 ProFTPD 1.3.1 Server (Debian)\r\n"),
+        grab_as(monkeypatch, "ftp"),
+    )
+    assert banner.text.startswith("220 ProFTPD 1.3.1")
+
+
+def test_other_ports_keep_the_short_wait(monkeypatch):
+    monkeypatch.setattr(probes, "GREETING_TIMEOUT", 5.0)
+    started = []
+
+    async def client(port):
+        monkeypatch.setattr(probes, "SERVICE_NAMES", {port: "memcached"})
+        started.append(asyncio.get_running_loop().time())
+        result = await grab_banner("127.0.0.1", port, listen=0.2, timeout=0.2)
+        started.append(asyncio.get_running_loop().time())
+        return result
+
+    run_with_server(silent, client)
+    assert started[1] - started[0] < 2
