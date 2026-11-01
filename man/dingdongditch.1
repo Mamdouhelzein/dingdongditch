@@ -1,0 +1,305 @@
+.TH DINGDONGDITCH 1 2026-11-01 "DingDongDitch 0.1.0" "User Commands"
+.SH NAME
+dingdongditch \- find open ports on hosts you own, and work out what is behind them
+.SH SYNOPSIS
+.B dingdongditch scan
+.RI [ options ]
+.I target
+.RI [ target ...]
+.br
+.B dingdongditch analyze
+.RB [ \-\-json ]
+.I report
+.br
+.B dingdongditch update\-db
+.br
+.B dingdongditch
+.RB [ \-V | \-\-version ]
+.RB [ \-\-help ]
+.SH DESCRIPTION
+.B dingdongditch
+knocks on the TCP ports of a host, asks each open port what it is, and reports
+the service, product and version it found.
+With
+.B \-\-karen\-mode
+it also reads web pages and TLS certificates, guesses the operating system,
+and proves common misconfigurations, which it marks
+.BR CONFIRMED .
+.PP
+It detects and never exploits.
+Only scan systems you own or have written permission to test.
+.PP
+The risk model is not built yet, so the Risk column says
+.I model not trained yet
+unless a finding is
+.BR CONFIRMED .
+.SH COMMANDS
+.TP
+.B scan
+Scan one or more targets and print what was found.
+.TP
+.B analyze
+Read an nmap XML report made with
+.B nmap \-sV \-oX
+and print it the same way.
+Give
+.B \-
+as
+.I report
+to read from standard input.
+.TP
+.B update\-db
+Download CVE data.
+Not implemented yet: it prints a message and exits with status 1.
+.SH OPTIONS
+.SS Scan options
+.TP
+.BR \-e ", " \-\-engine " " \fIengine\fR
+Which scanner to use:
+.B own
+(the built-in scanner, the default) or
+.B nmap
+(needs nmap installed).
+.TP
+.BR \-P ", " \-\-profile " " \fIprofile\fR
+How many ports to scan:
+.BR quick ,
+.B default
+or
+.BR full .
+See
+.BR PORTS .
+.TP
+.BR \-p ", " \-\-ports " " \fIports\fR
+Scan exactly these ports, for example
+.B 22,80,443
+or
+.B 8000\-9000
+or both together.
+This wins over
+.B \-\-profile
+and over the all-ports default of
+.BR \-\-karen\-mode .
+.TP
+.B \-\-karen\-mode
+Demand to speak to every port's manager.
+See
+.BR "KAREN MODE" .
+.TP
+.BR \-t ", " \-\-timeout " " \fIseconds\fR
+Built-in scanner only.
+How long to wait for each port to accept a connection.
+Default 1.0, minimum 0.05.
+.TP
+.BR \-c ", " \-\-concurrency " " \fIcount\fR
+Built-in scanner only.
+How many ports to try at once.
+Default 500, minimum 1.
+Lowered automatically if the system runs out of sockets.
+.TP
+.BR \-o ", " \-\-save " " \fIfile\fR
+Also save the raw results to
+.IR file :
+JSON with the built-in scanner, nmap XML with the nmap engine.
+.TP
+.B \-\-json
+Print JSON instead of a table.
+Only the JSON goes to standard output, so it can be piped.
+Also accepted by
+.BR analyze .
+.SS General options
+.TP
+.BR \-V ", " \-\-version
+Show the version and exit.
+.TP
+.B \-\-help
+Show help and exit.
+Works after a command too.
+.SH TARGETS
+A target can be an IP address, a hostname or a subnet in CIDR form.
+Separate several with spaces or commas.
+Duplicates are removed.
+A subnet can have at most 65,536 addresses (a /16), so a typo cannot start a
+huge scan.
+.SH PORTS
+.TP
+.B quick
+107 hand-picked common and risky ports.
+.TP
+.B default
+Ports 1\-1024 plus the quick list, 1,094 ports in all.
+.TP
+.B full
+All 65,535 TCP ports.
+.PP
+With
+.BR "\-\-engine nmap" ,
+.B quick
+and
+.B default
+are nmap's own top 100 and top 1000 ports instead.
+.SH KAREN MODE
+.B \-\-karen\-mode
+scans all 65,535 ports unless
+.B \-p
+is given.
+For each open port it also:
+.IP \(bu 2
+tries more probes on ports the first probe did not identify, over plain text
+and TLS
+.IP \(bu 2
+fetches the home page of web ports for the title, telling headers and
+application
+.IP \(bu 2
+reads TLS certificates and flags ones that are expired, not yet valid,
+self-signed or weakly signed, and old TLS versions
+.IP \(bu 2
+guesses each host's operating system from clues in the banners, and shows
+which port gave each clue
+.IP \(bu 2
+runs the checks in
+.B CONFIRMED CHECKS
+.PP
+The operating system guess is only a guess.
+Banners can be wrong or changed by the owner.
+.PP
+With
+.BR "\-\-engine nmap" ,
+this flag only scans all ports and uses every nmap version probe.
+The extras above come from the built-in scanner.
+.SH CONFIRMED CHECKS
+Each check does the smallest exchange that proves the problem, then leaves.
+Nothing is guessed, listed, read or changed.
+.TP
+.B ftp\-anonymous
+Anyone can log in to the FTP server.
+Logs in as the public
+.B anonymous
+user and quits straight away.
+.TP
+.B open\-shell
+A port gives a command prompt with no login.
+Recognised from the prompt it sends.
+Nothing is ever typed into it.
+.TP
+.B redis\-no\-password
+Redis answers without a password.
+Uses the read-only
+.B INFO server
+reply that banner grabbing already asked for.
+.TP
+.B mongodb\-no\-auth
+MongoDB answers without a login.
+Asks for the list of databases, filtered to a made-up name so that no real
+names come back.
+.TP
+.B telnet\-open
+Telnet is running, which sends everything unencrypted.
+Proved by its greeting, without logging in.
+.SH OUTPUT
+The table goes to standard output.
+Warnings and progress go to standard error.
+.PP
+.B \-\-json
+prints a list with one object per open port.
+Its fields are
+.BR host ,
+.BR port ,
+.BR protocol ,
+.BR state ,
+.BR name ,
+.BR product ,
+.BR version ,
+.BR extrainfo ,
+.BR cpes ,
+.BR banner ,
+.BR tls ,
+.BR http_title ,
+.BR http_headers ,
+.BR tls_cert ,
+.BR os_guess ,
+.B os_evidence
+and
+.BR findings .
+Each finding has
+.BR check ,
+.BR title ,
+.BR why ,
+.B fix
+and
+.BR status .
+.SH MISSING PORTS
+Going too fast can make open ports look closed, especially inside a virtual
+machine or over a slow link.
+If a scan finds fewer ports than expected, slow it down:
+.RS
+.PP
+.B dingdongditch scan
+.I target
+.B \-c 100 \-t 3
+.RE
+.PP
+Ports that time out get a second, slower try.
+This is skipped when more than 5,000 ports time out, which is normal behind a
+firewall, and the scan prints a warning.
+.PP
+Silent FTP and mail ports are given up to 12 seconds to greet, because some
+servers delay their greeting.
+.SH LIMITATIONS
+.IP \(bu 2
+TCP only, so UDP services such as SNMP are not seen.
+.IP \(bu 2
+It makes full TCP connections, which the target can log.
+.IP \(bu 2
+Services that wait for the client to speak in their own protocol, such as
+PostgreSQL, DNS and SMB, are named from their port number with no version.
+.IP \(bu 2
+Versions come from what a service says about itself, and Linux distributions
+often patch old versions without changing the number.
+.SH EXIT STATUS
+.TP
+.B 0
+Success, including a scan that found no open ports.
+.TP
+.B 1
+The scan failed, a file was not found or is not an nmap report, or the command
+is not implemented yet.
+.TP
+.B 2
+The command line was wrong.
+.SH EXAMPLES
+.TP
+.B dingdongditch scan 192.168.195.130
+Scan the default ports of one host.
+.TP
+.B dingdongditch scan 192.168.195.130 \-p 8000\-9000
+Scan a range of ports.
+.TP
+.B dingdongditch scan 192.168.195.0/24 \-P quick
+Scan a whole subnet quickly.
+.TP
+.B dingdongditch scan 10.0.0.1,10.0.0.2
+Scan two hosts.
+.TP
+.B dingdongditch scan 192.168.195.130 \-\-karen\-mode
+Scan every port and run every safe check.
+.TP
+.B dingdongditch scan 192.168.195.130 \-\-json \-o scan.json
+Print JSON and save it to a file.
+.TP
+.B dingdongditch scan 192.168.195.130 \-e nmap \-o scan.xml
+Scan with nmap and keep its XML report.
+.TP
+.B dingdongditch analyze scan.xml
+Read that report later.
+.TP
+.B nmap \-sV \-oX \- 192.168.195.130 | dingdongditch analyze \-
+Read a report straight from nmap.
+.SH SEE ALSO
+.BR nmap (1)
+.SH BUGS
+Report bugs at
+.UR https://github.com/Mamdouhelzein/dingdongditch/issues
+.UE .
+.SH AUTHOR
+Mamdouh El Zein

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "dingdongditch"
 version = "0.1.0"
-description = "ML-powered risk scorer for open ports: parses nmap -sV output, matches services to CVEs, and predicts which are most likely to be exploited."
+description = "Port scanner written from scratch: finds open ports, identifies services and versions, and proves common misconfigurations. ML exploit scoring is in progress."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -46,6 +46,9 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 dingdongditch = ["data/*.json"]
+
+[tool.setuptools.data-files]
+"share/man/man1" = ["man/dingdongditch.1"]  # pipx links this so `man dingdongditch` works
 
 [tool.ruff]
 line-length = 100
