@@ -10,9 +10,12 @@ literal "\\xNN" text, which some patterns below rely on.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
+from functools import lru_cache
+from importlib import resources
 
 from dingdongditch.nmap_parser import Service
 
@@ -172,6 +175,58 @@ def _identify_http(banner: str) -> Fingerprint:
     return fp
 
 
+# --- PostgreSQL: the source line its startup error came from -> releases ---
+# Built from PostgreSQL's own source by scripts/make_postgres_lines.py.
+
+_PG_SOURCE = re.compile(r" \((?P<file>[\w.]+):(?P<line>\d+)\b[^()]*\)$")
+
+
+@lru_cache(maxsize=1)
+def _postgres_lines() -> dict[str, dict[str, list[str]]]:
+    table = resources.files("dingdongditch").joinpath("data/postgres_lines.json")
+    return json.loads(table.read_text(encoding="utf-8"))
+
+
+def _version_runs(versions: Iterable[str]) -> list[tuple[int, ...]]:
+    """Releases as sorted (first, last) runs: 8.3.0, 8.3.1, 8.3.2, 8.4.1 -> 2 runs."""
+    runs: list[list[tuple[int, ...]]] = []
+    for key in sorted({tuple(int(x) for x in v.split(".")) for v in versions}):
+        last = runs[-1][1] if runs else None
+        if last and last[:-1] == key[:-1] and last[-1] + 1 == key[-1]:
+            runs[-1][1] = key
+        else:
+            runs.append([key, key])
+    return [tuple(run) for run in runs]
+
+
+def _identify_postgres(banner: str) -> Fingerprint:
+    """PostgreSQL, with the version if its error's source line pins one down.
+
+    One line can be shared by several releases: then the version is the branch
+    they share (e.g. 8.3), and extrainfo lists the exact candidates.
+    """
+    m = _PG_SOURCE.search(banner)
+    versions = _postgres_lines().get(m["file"], {}).get(m["line"], []) if m else []
+    if not versions:
+        return Fingerprint("postgresql", "PostgreSQL", cpes=["cpe:/a:postgresql:postgresql"])
+
+    def name(key: tuple[int, ...]) -> str:
+        return ".".join(map(str, key))
+
+    runs = _version_runs(versions)
+    # A branch is 8.3 before PostgreSQL 10, and just 10, 11, ... after.
+    branches = {first[: 2 if first[0] < 10 else 1] for first, _ in runs}
+    if len(runs) == 1 and runs[0][0] == runs[0][1]:
+        version, extra = name(runs[0][0]), ""
+    else:
+        version = name(branches.pop()) if len(branches) == 1 else ""
+        extra = "one of " + ", ".join(
+            name(first) if first == last else f"{name(first)}-{name(last)}" for first, last in runs
+        )
+    cpe = "cpe:/a:postgresql:postgresql" + (f":{version}" if version else "")
+    return Fingerprint("postgresql", "PostgreSQL", version, extra, [cpe])
+
+
 def identify(banner: str) -> Fingerprint | None:
     """Work out what a service is from its banner, or None if we can't tell."""
     if not banner:
@@ -180,6 +235,8 @@ def identify(banner: str) -> Fingerprint | None:
         return Fingerprint("mongodb", "MongoDB", cpes=["cpe:/a:mongodb:mongodb"])
     if re.match(r"HTTP/\d(?:\.\d)? \d{3}", banner):
         return _identify_http(banner)
+    if banner.startswith("postgresql error: "):  # our PostgreSQL probe's answer
+        return _identify_postgres(banner)
     for rule in RULES:
         if fp := _apply(rule, banner):
             return fp

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from dingdongditch import probes
+from dingdongditch import binary_probes, probes
 from dingdongditch.nmap_parser import Service
 from dingdongditch.probes import MAX_BYTES, add_banners, clean_banner, grab_banner
 
@@ -335,7 +335,8 @@ def test_karen_mode_keeps_first_answer_if_nothing_recognised(monkeypatch):
 
 def test_extra_probes_are_the_safe_ones():
     for _, probe in probes.extra_attempts("10.0.0.1"):
-        assert probe in (None, probes.REDIS_PROBE, probes.BLANK_PROBE) or probe.startswith(
+        safe = (None, probes.REDIS_PROBE, probes.BLANK_PROBE, binary_probes.PG_STARTUP)
+        assert probe in safe or probe.startswith(
             b"HEAD / HTTP/1.0\r\n"
         )
 

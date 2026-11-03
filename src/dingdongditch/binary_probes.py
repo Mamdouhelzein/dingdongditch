@@ -77,6 +77,45 @@ def decode_dns(raw: bytes) -> str | None:
     return f"version.bind: no answer ({_DNS_RESULTS.get(error, f'code {error}')})"
 
 
+# --- PostgreSQL -----------------------------------------------------------
+# PostgreSQL tells nobody its version before login. So we open with a startup
+# message for protocol 4.0, which doesn't exist, and it refuses straight away,
+# before any login. Its error names the source file and line it came from, and
+# those differ between releases (fingerprints.py has the table).
+
+PG_STARTUP = struct.pack(">II", 8, 4 << 16)  # length 8, protocol 4.0
+
+_PG_FIELDS = {"S": "severity", "C": "code", "M": "message", "F": "file", "L": "line",
+              "R": "routine"}
+
+
+def decode_postgres(raw: bytes) -> str | None:
+    """'postgresql error: FATAL 0A000: <message> (postmaster.c:1507 ProcessStartupPacket)'.
+
+    None if `raw` isn't a complete PostgreSQL error message.
+    """
+    if len(raw) < 6 or raw[:1] != b"E":
+        return None
+    (length,) = struct.unpack_from(">I", raw, 1)
+    body = raw[5 : 1 + length]
+    if length < 5 or len(body) != length - 4 or not body.endswith(b"\x00\x00"):
+        return None
+    fields = {}
+    for field in body[:-1].split(b"\x00")[:-1]:  # "S" "FATAL" \0 "C" "0A000" \0 ... \0
+        if not field:
+            return None
+        key, value = field[:1].decode("latin-1"), field[1:].decode("utf-8", "backslashreplace")
+        fields[_PG_FIELDS.get(key, key)] = " ".join(value.split())
+    if "message" not in fields:
+        return None
+    text = f"postgresql error: {fields.get('severity', '')} {fields.get('code', '')}: "
+    text += fields["message"]
+    if "file" in fields and "line" in fields:
+        where = [f"{fields['file']}:{fields['line']}", fields.get("routine", "")]
+        text += f" ({' '.join(filter(None, where))})"
+    return text
+
+
 def describe(raw: bytes) -> str | None:
     """Readable text for a binary answer we asked for, or None."""
-    return decode_dns(raw)
+    return decode_dns(raw) or decode_postgres(raw)

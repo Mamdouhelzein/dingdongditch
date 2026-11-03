@@ -28,7 +28,7 @@ DEFAULT_CONCURRENCY = 100  # lower than the port scan: each grab holds a connect
 
 _QUIET_GAP = 0.3  # once a service has started talking, stop when it pauses this long
 _SLOW_GREETERS = {"ftp", "smtp", "submission", "pop3", "imap"}
-_NEVER_TALK_FIRST = {"domain"}  # binary protocols: ask straight away
+_NEVER_TALK_FIRST = {"domain", "postgresql"}  # binary protocols: ask straight away
 TIMEOUT_ERRORS = (asyncio.TimeoutError, TimeoutError)
 
 # Default service names (from ports.py) that speak HTTP, so a HEAD request fits.
@@ -60,6 +60,8 @@ def probe_for(host: str, port: int) -> bytes:
         return REDIS_PROBE
     if name == "domain":
         return binary_probes.DNS_VERSION_QUERY
+    if name == "postgresql":
+        return binary_probes.PG_STARTUP
     if name is None or any(web in name for web in _WEB_NAMES):
         return http_probe(host)  # unknown ports are most often web apps in labs
     return BLANK_PROBE
@@ -76,6 +78,7 @@ def extra_attempts(host: str) -> list[tuple[bool, bytes | None]]:
         (True, http),
         (False, REDIS_PROBE),
         (False, BLANK_PROBE),
+        (False, binary_probes.PG_STARTUP),  # PostgreSQL ignores everything else
         (True, None),  # TLS services that greet after the handshake (e.g. imaps)
     ]
 

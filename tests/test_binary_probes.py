@@ -1,7 +1,7 @@
 import struct
 
 import pytest
-from test_probes import answers, grab_as, run_with_server
+from test_probes import answers, grab_as, karen_grab, recording, run_with_server
 
 from dingdongditch import binary_probes, probes
 from dingdongditch.binary_probes import DNS_ID, DNS_VERSION_QUERY, decode_dns
@@ -92,3 +92,81 @@ def test_text_answers_are_left_alone():
 
 def test_unknown_binary_still_escaped():
     assert to_text(b"\x00\x01\x1b[31m") == "\\x00\\x01\\x1b[31m"
+
+
+# --- PostgreSQL -------------------------------------------------------------
+
+
+def pg_error(**fields: str) -> bytes:
+    """A PostgreSQL ErrorResponse: 'E', length, then type letter + text + NUL per field."""
+    body = b"".join(k.encode() + v.encode() + b"\0" for k, v in fields.items()) + b"\0"
+    return b"E" + struct.pack(">I", len(body) + 4) + body
+
+
+REFUSED_4_0 = {
+    "S": "FATAL", "C": "0A000",
+    "M": "unsupported frontend protocol 4.0: server supports 1.0 to 3.0",
+    "F": "postmaster.c", "L": "1497", "R": "ProcessStartupPacket",
+}
+
+
+def test_postgres_question_is_protocol_4():
+    assert binary_probes.PG_STARTUP == b"\x00\x00\x00\x08\x00\x04\x00\x00"
+
+
+@pytest.mark.parametrize("reply, expected", [
+    (pg_error(**REFUSED_4_0),
+     "postgresql error: FATAL 0A000: unsupported frontend protocol 4.0: server supports 1.0 "
+     "to 3.0 (postmaster.c:1497 ProcessStartupPacket)"),
+    (pg_error(S="FATAL", V="FATAL", C="0A000", M="no"), "postgresql error: FATAL 0A000: no"),
+    (pg_error(S="FATAL", C="0A000", M="line\nbreak"), "postgresql error: FATAL 0A000: line break"),
+    (pg_error(**REFUSED_4_0)[:-1], None),  # cut short
+    (pg_error(S="FATAL", C="0A000"), None),  # no message
+    (b"ERROR\r\n", None),  # memcached's answer to a blank line starts with E too
+    (b"E", None),
+])
+def test_decode_postgres(reply, expected):
+    assert binary_probes.decode_postgres(reply) == expected
+
+
+def pg_fingerprint(file: str, line: str):
+    return identify(to_text(pg_error(**{**REFUSED_4_0, "F": file, "L": line})))
+
+
+@pytest.mark.parametrize("file, line, version, extra", [
+    ("postmaster.c", "1497", "8.3", "one of 8.3.0-8.3.7"),  # Metasploitable 2's 8.3.1
+    ("backend_startup.c", "698", "17.10", ""),  # only one release has it
+    ("backend_startup.c", "707", "", "one of 17.11, 18.0-18.3"),  # two branches
+    ("postmaster.c", "99999", "", ""),  # patched or unknown: still PostgreSQL
+    ("nowhere.c", "1497", "", ""),
+])
+def test_postgres_version_from_source_line(file, line, version, extra):
+    fp = pg_fingerprint(file, line)
+    assert (fp.name, fp.product, fp.version, fp.extrainfo) == (
+        "postgresql", "PostgreSQL", version, extra
+    )
+    assert fp.cpes == ["cpe:/a:postgresql:postgresql" + (f":{version}" if version else "")]
+
+
+def test_postgres_without_source_line_is_still_postgres():
+    fp = identify(to_text(pg_error(S="FATAL", C="0A000", M="unsupported frontend protocol")))
+    assert (fp.name, fp.product, fp.version) == ("postgresql", "PostgreSQL", "")
+
+
+def test_postgres_port_asks_straight_away(monkeypatch):
+    monkeypatch.setattr(probes, "LISTEN_TIMEOUT", 30)
+    banner = run_with_server(
+        answers(binary_probes.PG_STARTUP, pg_error(**REFUSED_4_0)),
+        grab_as(monkeypatch, "postgresql"),
+    )
+    assert banner.text.startswith("postgresql error: FATAL 0A000")
+
+
+def test_karen_mode_finds_postgres_on_odd_port(monkeypatch):
+    def postgres_only(request):
+        return pg_error(**REFUSED_4_0) if request == binary_probes.PG_STARTUP else b""
+
+    handler, requests = recording(postgres_only)
+    banner = run_with_server(handler, karen_grab(monkeypatch))
+    assert identify(banner.text).product == "PostgreSQL"
+    assert requests[-1] == binary_probes.PG_STARTUP
