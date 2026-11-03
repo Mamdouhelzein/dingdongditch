@@ -26,6 +26,13 @@ it also reads web pages and TLS certificates, guesses the operating system,
 and proves common misconfigurations, which it marks
 .BR CONFIRMED .
 .PP
+Services that only answer in their own protocol get one read-only question in
+it.
+DNS servers are asked for
+.BR version.bind ,
+and PostgreSQL is sent a startup message for a protocol version that does not
+exist, which it refuses before any login.
+.PP
 It detects and never exploits.
 Only scan systems you own or have written permission to test.
 .PP
@@ -157,6 +164,12 @@ self-signed or weakly signed, and old TLS versions
 guesses each host's operating system from clues in the banners, and shows
 which port gave each clue
 .IP \(bu 2
+registers with IRC servers as a visitor, joining no channels, and opens an
+anonymous SMB1 session with no user or password, to read the software's name and
+version.
+If an IRC server refuses for connecting too often, it waits about a minute and
+tries once more.
+.IP \(bu 2
 runs the checks in
 .B CONFIRMED CHECKS
 .PP
@@ -251,8 +264,13 @@ TCP only, so UDP services such as SNMP are not seen.
 .IP \(bu 2
 It makes full TCP connections, which the target can log.
 .IP \(bu 2
-Services that wait for the client to speak in their own protocol, such as
-PostgreSQL, DNS and SMB, are named from their port number with no version.
+Many services that only answer in their own protocol, such as java\-rmi,
+are named from their port number with no version.
+.IP \(bu 2
+PostgreSQL never states its version before login.
+It gets a range of releases instead, from the source line its error came from.
+.IP \(bu 2
+SMB versions need Karen mode and SMB1, which newer servers turn off.
 .IP \(bu 2
 Versions come from what a service says about itself, and Linux distributions
 often patch old versions without changing the number.

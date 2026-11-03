@@ -99,10 +99,13 @@ nmap -sV -oX - 192.168.195.130 | dingdongditch analyze -
 |---|---|---|
 | Ports | Chosen by the profile | All 65,535, unless you use `-p` |
 | Service and version | Banner plus one safe probe | More probes for ports it can't identify |
+| IRC and SMB versions | | Read from a short visitor conversation |
 | Web ports | Server header | Page title, headers and the app behind them |
 | TLS ports | | Certificate details and problems |
 | Operating system | | A guess, showing which port gave each clue |
 | Misconfigurations | | Proved and marked `CONFIRMED` |
+
+To read versions, Karen mode says hello to IRC servers as a visitor (it joins no channels) and opens an anonymous SMB session (no user, no password) to read the server's name, then leaves. If an IRC server says it's connecting too fast, it waits a minute and tries once more, so those scans take a little longer.
 
 These checks do the smallest exchange that proves the problem, then leave. They never guess passwords or read data.
 
@@ -122,7 +125,7 @@ your targets  →  find open ports  →  ask each port what it is  →  match th
 ```
 
 1. **Port finder:** an async TCP connect scan with a worker pool. Ports that time out get a second, slower try, and it slows down by itself if the system runs out of sockets.
-2. **Banner grabbing:** listens first, because many services speak first, then sends one harmless message. It tries TLS if plain text fails, and reads at most 4 KB.
+2. **Banner grabbing:** listens first, because many services speak first, then sends one harmless message. It tries TLS if plain text fails, and reads at most 4 KB. Services that only answer in their own protocol get one read-only question in it: DNS servers are asked their `version.bind`, and PostgreSQL gets a startup message for a protocol version that doesn't exist. It refuses before any login, and its error message shows which releases it could be.
 3. **Fingerprints:** regex rules turn a banner into a product, version and CPE name. The CPE is what will link a service to its CVEs.
 
 ## How good is it?
@@ -132,13 +135,16 @@ Tested against a real Metasploitable 2:
 - A default scan found 24 open ports, and nmap's default top 1000 ports found 23. The two tools use different port lists.
 - A full Karen mode scan from Kali found 30 open ports.
 
-nmap is still better at identifying services that wait for the client to speak in their own protocol. PostgreSQL, DNS (BIND), SMB (Samba), java-rmi and the UnrealIRCd version are named from the port number or left out for now.
+- Like nmap, it names BIND 9.4.2 and PostgreSQL 8.3 (one of 8.3.0 to 8.3.7) in every scan, and Samba 3.0.20 and UnrealIRCd 3.2.8.1 in Karen mode.
+
+nmap still knows far more services, with thousands of probes. java-rmi, for example, is only named from its port number here.
 
 Other limits:
 
 - TCP only, so no UDP services yet.
 - It makes full connections, which the target can log.
 - The Redis and MongoDB checks have only been tested against local fake servers so far, not real ones.
+- SMB versions need SMB1, which newer Windows and Samba turn off.
 - Versions are what a service says about itself, and Linux distributions often patch old versions without changing the number.
 
 ## Roadmap
@@ -166,12 +172,16 @@ src/dingdongditch/
   tls_info.py      # Karen mode: certificates
   os_guess.py      # Karen mode: OS guess
   misconfig.py     # Karen mode: CONFIRMED checks
+  binary_probes.py # DNS and PostgreSQL questions, and reading their answers
+  conversations.py # Karen mode: IRC and SMB hellos that reveal versions
   mongo_wire.py    # just enough MongoDB protocol for its check
   own_scanner.py   # runs the steps above in order
   nmap_scanner.py  # the optional nmap engine
   nmap_parser.py   # nmap XML → services
   collect.py, features.py, train.py, matcher.py, scorer.py  # not built yet
+  data/            # PostgreSQL error line -> release table
 man/               # the man page
+scripts/           # rebuilds the PostgreSQL table from its source
 tests/             # pytest, using fake local servers
 ```
 
