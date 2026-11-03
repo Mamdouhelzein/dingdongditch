@@ -88,6 +88,16 @@ RULES: list[Rule] = [
     _r(r"^version\.bind: PowerDNS Authoritative Server " + _V, "domain",
        "PowerDNS Authoritative Server", "powerdns:authoritative"),
     _r(r"^version\.bind:", "domain"),  # a DNS server that keeps its version to itself
+    # IRC, once registered (conversations.py): "Your host is X, running version Y".
+    _r(r"^:\S+ 002 .*running version Unreal(?:IRCd-)?" + _V, "irc", "UnrealIRCd",
+       "unrealircd:unrealircd"),
+    _r(r"^:\S+ 002 .*running version InspIRCd-(?P<version>\d+(?:\.\d+)*)", "irc", "InspIRCd",
+       "inspircd:inspircd"),
+    _r(r"^:\S+ 002 .*running version ngircd-(?P<version>\d+(?:\.\d+)*)", "irc", "ngIRCd",
+       "barton:ngircd"),
+    _r(r"^:\S+ 002 .*running version hybrid-" + _V, "irc", "ircd-hybrid"),
+    _r(r"^:\S+ 002 .*running version ircd-ratbox-" + _V, "irc", "ircd-ratbox"),
+    _r(r"^:\S+ 002 .*running version (?P<extra>\S+)", "irc"),
     # Other
     _r(r"^:\S+ NOTICE AUTH\b", "irc"),
     _r(r"VMware Authentication Daemon Version " + _V, "vmware-auth",

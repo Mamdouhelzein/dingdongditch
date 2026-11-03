@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 
-from dingdongditch import connect_scan, http_info, misconfig, probes, tls_info
+from dingdongditch import connect_scan, conversations, http_info, misconfig, probes, tls_info
 from dingdongditch.fingerprints import fingerprint
 from dingdongditch.nmap_parser import Service
 from dingdongditch.os_guess import add_os_guess
@@ -47,6 +47,7 @@ def run_scan(
     """Scan `hosts` x `ports` and return the identified open services.
 
     `karen_mode` sends extra probes to ports the first probe didn't identify,
+    has a short conversation with services that only name their version after hello,
     fetches web ports' home pages for their title, headers and app, reads TLS
     certificates, guesses each host's OS, and runs the safe misconfiguration checks.
     Callbacks (for progress display): `on_result()` after each port check,
@@ -64,6 +65,7 @@ def run_scan(
     services = probes.add_banners(services, concurrency=grab_concurrency, karen_mode=karen_mode)
     services = fingerprint(services)
     if karen_mode:
+        services = conversations.add_versions(services, concurrency=grab_concurrency)
         services = http_info.add_http_info(services, concurrency=grab_concurrency)
         services = tls_info.add_tls_info(services, concurrency=grab_concurrency)
         services = add_os_guess(services)
