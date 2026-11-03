@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from dingdongditch.nmap_parser import Service
 
@@ -21,6 +21,7 @@ class Clue:
     version: str = ""
     port: int = 0
     service: str = ""
+    program: str = ""  # the product that gave the clue, e.g. "Samba smbd"
 
     @property
     def os(self) -> str:
@@ -61,7 +62,7 @@ PORT_HINTS = {"msrpc": ("Windows", "Windows"), "ms-wbt-server": ("Windows", "Win
 
 def clue_from(svc: Service) -> Clue | None:
     """The best OS clue from one service, or None."""
-    where = {"port": svc.port, "service": svc.name}
+    where = {"port": svc.port, "service": svc.name, "program": svc.product}
     text = "\n".join([svc.banner, *svc.http_headers.values()])
     for pattern, distro, family in RULES:
         m = pattern.search(text)
@@ -80,6 +81,18 @@ def _most_common(values: Iterable[str]) -> str:
 
 def guess_os(clues: list[Clue]) -> str:
     """One OS name from a host's clues: most-voted family, then its most specific distro."""
+    # One program on several ports (Samba on 139 and 445) is one vote, not several.
+    votes: dict[tuple[str, ...], Clue] = {}
+    for c in clues:
+        votes.setdefault((c.program, c.distro, c.version) if c.program else (str(c.port),), c)
+    clues = list(votes.values())
+    # Ubuntu's packages often still say "Debian" (Samba, ProFTPD), but Debian's
+    # never say "Ubuntu", so an Ubuntu clue makes the plain Debian ones agree.
+    # Not when a package names a Debian release (+deb9u7): that's a Debian build.
+    debian_release = any(c.distro == "Debian" and c.version for c in clues)
+    if any(c.distro == "Ubuntu" for c in clues) and not debian_release:
+        clues = [replace(c, distro="Ubuntu") if c.distro == "Debian" and not c.version else c
+                 for c in clues]
     family = _most_common(c.family for c in clues)
     in_family = [c for c in clues if c.family == family]
     # "Debian" says more than a bare "Linux", however many ports said Linux.

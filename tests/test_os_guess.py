@@ -133,3 +133,39 @@ def test_table_prints_one_guess_per_host_and_labels_it(monkeypatch):
     assert result.exit_code == 0, result.output
     assert result.stdout.count("OS guess for 10.0.0.5: Ubuntu") == 1
     assert "port 22 (ssh): Ubuntu" in result.stdout
+
+
+def test_one_program_on_several_ports_votes_once():
+    samba = b"smb lan manager: Samba 4.9.5-Debian"
+    result = guess(
+        svc(22, b"SSH-2.0-OpenSSH_7.4", product="OpenSSH", http_headers={}),
+        svc(80, b"HTTP/1.1 200 OK\r\nServer: Apache/2.4.6 (CentOS)\r\n\r\n", "http",
+            product="Apache httpd"),
+        svc(139, samba, "smb", product="Samba smbd"),
+        svc(445, samba, "smb", product="Samba smbd"),
+        svc(8080, b"HTTP/1.1 200 OK\r\nServer: nginx (CentOS)\r\n\r\n", "http", product="nginx"),
+    )
+    assert result.os_guess == "CentOS"  # 2 programs say CentOS, 1 says Debian
+    assert "port 445 (smb): Debian" in result.os_evidence  # every port is still shown
+
+
+def test_metasploitable_is_ubuntu_although_some_packages_say_debian():
+    # What Metasploitable 2 really says: Ubuntu 8.04, whose ProFTPD and Samba say "Debian".
+    result = guess(
+        svc(22, b"SSH-2.0-OpenSSH_4.7p1 Debian-8ubuntu1", product="OpenSSH"),
+        svc(139, b"smb lan manager: Samba 3.0.20-Debian", "smb", product="Samba smbd"),
+        svc(445, b"smb lan manager: Samba 3.0.20-Debian", "smb", product="Samba smbd"),
+        svc(2121, b"220 ProFTPD 1.3.1 Server (Debian) [::ffff:10.0.0.5]", "ftp",
+            product="ProFTPD"),
+    )
+    assert result.os_guess == "Ubuntu"
+
+
+def test_debian_with_a_version_is_not_merged_into_ubuntu():
+    result = guess(
+        svc(22, b"SSH-2.0-OpenSSH_7.4p1 Debian-10+deb9u7", product="OpenSSH"),
+        svc(80, b"HTTP/1.1 200 OK\r\nServer: Apache/2.4.25 (Debian)\r\n\r\n", "http",
+            product="Apache httpd"),
+        svc(3306, b"J\x00\x00\x00\x0a5.7.33-0ubuntu0.18.04.1\x00", "mysql", product="MySQL"),
+    )
+    assert result.os_guess == "Debian 9"
