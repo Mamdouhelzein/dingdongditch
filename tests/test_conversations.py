@@ -1,4 +1,5 @@
 import asyncio
+import socket
 import struct
 
 import pytest
@@ -311,3 +312,77 @@ def test_smb_windows_is_an_os_clue():
     assert clue_from(windows).distro == "Windows"
     samba = svc(445, "smb", banner="smb lan manager: Samba 3.0.20-Debian")
     assert clue_from(samba).distro == "Debian"
+
+
+# --- servers that say "too fast" ----------------------------------------------
+
+
+def throttled_irc(how: str):
+    async def handler(reader, writer):
+        await reader.readline()
+        if how == "error":
+            writer.write(b"ERROR :Closing Link: [127.0.0.1] (Throttled: Reconnecting too fast)"
+                         b" -Email admin@lab for more information.\r\n")
+        elif how == "reset":  # slam the door (a TCP reset on Linux; Windows still says goodbye)
+            sock = writer.get_extra_info("socket")
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        writer.close()  # "silent": just hang up
+
+    return handler
+
+
+@pytest.mark.parametrize("how", ["error", "reset", "silent"])
+def test_irc_throttled_means_try_later(how):
+    with pytest.raises(conversations.TryLater):
+        talk_to(throttled_irc(how))
+
+
+def test_irc_other_errors_just_end_the_conversation():
+    async def handler(reader, writer):
+        await reader.readline()
+        writer.write(b"ERROR :Closing Link: [127.0.0.1] (You are banned)\r\n")
+        writer.close()
+
+    assert talk_to(handler) == ""
+
+
+def test_add_versions_waits_and_tries_once_more(monkeypatch):
+    attempts = []
+
+    async def throttled_once(host, port, use_tls, timeout):
+        attempts.append(port)
+        if len(attempts) == 1:
+            raise conversations.TryLater("too fast")
+        return ":irc.lab 002 ddd1 :Your host is irc.lab, running version Unreal3.2.8.1"
+
+    monkeypatch.setattr(conversations, "RETRY_WAIT", 0)
+    monkeypatch.setattr(conversations, "CONVERSATIONS", {"irc": throttled_once})
+    (irc,) = add_versions([svc(6667, "irc")])
+    assert attempts == [6667, 6667]
+    assert irc.version == "3.2.8.1"
+
+
+def test_add_versions_gives_up_after_the_second_refusal(monkeypatch):
+    async def always_throttled(host, port, use_tls, timeout):
+        raise conversations.TryLater("too fast")
+
+    monkeypatch.setattr(conversations, "RETRY_WAIT", 0)
+    monkeypatch.setattr(conversations, "CONVERSATIONS", {"irc": always_throttled})
+    (irc,) = add_versions([svc(6667, "irc")])
+    assert irc.version == ""
+
+
+def test_add_versions_takes_turns_on_one_host(monkeypatch):
+    running, most = 0, 0
+
+    async def slow(host, port, use_tls, timeout):
+        nonlocal running, most
+        running += 1
+        most = max(most, running)
+        await asyncio.sleep(0.05)
+        running -= 1
+        return ""
+
+    monkeypatch.setattr(conversations, "CONVERSATIONS", {"irc": slow})
+    add_versions([svc(6667, "irc"), svc(6697, "irc")])
+    assert most == 1

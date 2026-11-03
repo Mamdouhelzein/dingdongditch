@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import random
+import re
 import struct
 from collections.abc import Awaitable, Callable, Iterable
 
@@ -24,6 +25,15 @@ from dingdongditch.nmap_parser import Service
 IRC_TIME_LIMIT = 30.0
 _IRC_KEEP = {"002", "004"}  # "Your host is X, running version Y" and "X Y <modes>"
 _IRC_NICK_IN_USE = "433"
+_IRC_THROTTLED = re.compile(r"throttl|too fast", re.IGNORECASE)
+
+# Servers often allow only a few connections a minute from one address
+# (UnrealIRCd: 3 per 60 s), and the scan has already used some.
+RETRY_WAIT = 65.0
+
+
+class TryLater(Exception):
+    """The service turned us away for connecting too often."""
 
 
 def _irc_nick() -> str:
@@ -54,6 +64,8 @@ async def irc_hello(host: str, port: int, use_tls: bool, timeout: float) -> str:
             while received < probes.MAX_BYTES:
                 raw = await asyncio.wait_for(reader.readline(), max(deadline - loop.time(), 0))
                 if not raw:
+                    if not received:  # hung up without a word: also how throttling looks
+                        raise TryLater("closed before saying anything")
                     break
                 received += len(raw)
                 line = probes.clean_banner(raw)
@@ -61,6 +73,8 @@ async def irc_hello(host: str, port: int, use_tls: bool, timeout: float) -> str:
                 if words[0] == "PING" and len(words) > 1:  # "are you still there?"
                     await send(f"PONG {words[1]}")
                 elif line.startswith("ERROR"):
+                    if _IRC_THROTTLED.search(line) and not kept:
+                        raise TryLater(line)
                     break
                 elif len(words) > 1 and words[1] == _IRC_NICK_IN_USE:
                     await send(f"NICK {_irc_nick()}")
@@ -70,6 +84,10 @@ async def irc_hello(host: str, port: int, use_tls: bool, timeout: float) -> str:
                         break
         with contextlib.suppress(OSError):
             await send("QUIT :bye")
+    except ConnectionResetError as exc:
+        # Throttled servers often just slam the door before saying anything.
+        if not kept:
+            raise TryLater("connection reset before the welcome") from exc
     finally:
         writer.close()
         with contextlib.suppress(*probes.TIMEOUT_ERRORS, OSError):
@@ -222,14 +240,23 @@ CONVERSATIONS: dict[str, Conversation] = {
 
 async def _run(services: list[Service], concurrency: int, timeout: float) -> None:
     sem = asyncio.Semaphore(concurrency)
+    # One conversation of each kind per host at a time, so we don't add to a
+    # server's connection count while it's already counting.
+    turns: dict[tuple[str, Conversation], asyncio.Lock] = {}
 
     async def one(svc: Service, talk: Conversation) -> None:
-        async with sem:
-            try:
-                limit = IRC_TIME_LIMIT + timeout * 2  # IRC's is the longest conversation
-                text = await asyncio.wait_for(talk(svc.host, svc.port, svc.tls, timeout), limit)
-            except (*probes.TIMEOUT_ERRORS, OSError, ValueError, EOFError):
-                return
+        async with sem, turns.setdefault((svc.host, talk), asyncio.Lock()):
+            limit = IRC_TIME_LIMIT + timeout * 2  # IRC's is the longest conversation
+            for last_try in (False, True):
+                try:
+                    text = await asyncio.wait_for(talk(svc.host, svc.port, svc.tls, timeout), limit)
+                    break
+                except TryLater:
+                    if last_try:
+                        return
+                    await asyncio.sleep(RETRY_WAIT)
+                except (*probes.TIMEOUT_ERRORS, OSError, ValueError, EOFError):
+                    return
         if text:
             svc.banner = "\n".join(x for x in (svc.banner, text) if x)
             fingerprint([svc])
