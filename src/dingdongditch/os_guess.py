@@ -46,7 +46,8 @@ RULES = [
     _rule(r"\bFreeBSD\b", "FreeBSD", "BSD"),
     _rule(r"\bOpenBSD\b", "OpenBSD", "BSD"),
     _rule(r"\(Win(?:32|64)\)|OpenSSH_for_Windows|Microsoft-IIS|Microsoft-HTTPAPI"
-          r"|Microsoft FTP Service|Microsoft ESMTP|^(?:X-Powered-By: )?ASP\.NET",
+          r"|Microsoft FTP Service|Microsoft ESMTP|^(?:X-Powered-By: )?ASP\.NET"
+          r"|^smb native os: Windows\b",
           "Windows", "Windows"),
     # Redis INFO server has an os: line.
     _rule(r"^os:Linux\b", "Linux"),

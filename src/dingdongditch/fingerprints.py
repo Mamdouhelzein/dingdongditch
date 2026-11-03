@@ -98,6 +98,11 @@ RULES: list[Rule] = [
     _r(r"^:\S+ 002 .*running version hybrid-" + _V, "irc", "ircd-hybrid"),
     _r(r"^:\S+ 002 .*running version ircd-ratbox-" + _V, "irc", "ircd-ratbox"),
     _r(r"^:\S+ 002 .*running version (?P<extra>\S+)", "irc"),
+    # SMB, after an anonymous session setup (conversations.py).
+    _r(r"^smb lan manager: Samba (?P<version>\d+\.\d+\.\d+[a-z]?)-?(?P<extra>\S*)", "smb",
+       "Samba smbd", "samba:samba"),
+    _r(r"^smb native os: (?P<extra>Windows.+)$", "smb", "Microsoft Windows SMB"),
+    _r(r"^smb (?:native os|lan manager|domain):", "smb"),
     # Other
     _r(r"^:\S+ NOTICE AUTH\b", "irc"),
     _r(r"VMware Authentication Daemon Version " + _V, "vmware-auth",

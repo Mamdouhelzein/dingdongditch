@@ -1,11 +1,14 @@
+import asyncio
+import struct
 
 import pytest
 from test_probes import run_with_server
 
 from dingdongditch import conversations, own_scanner
-from dingdongditch.conversations import add_versions, irc_hello
+from dingdongditch.conversations import add_versions, irc_hello, smb_hello
 from dingdongditch.fingerprints import identify
 from dingdongditch.nmap_parser import Service
+from dingdongditch.os_guess import clue_from
 
 # --- IRC --------------------------------------------------------------------
 
@@ -155,3 +158,156 @@ def test_only_karen_mode_has_conversations(monkeypatch):
     assert calls == []
     own_scanner.run_scan(["10.0.0.5"], [6667], karen_mode=True)
     assert calls == [1]
+
+
+# --- SMB ----------------------------------------------------------------------
+
+UNICODE = 0x8000
+
+
+def smb_reply(command: int, words: bytes, data: bytes, flags2: int = 0x4001,
+              status: int = 0) -> bytes:
+    header = (b"\xffSMB" + bytes([command]) + struct.pack("<I", status) + b"\x98"
+              + struct.pack("<H", flags2) + b"\0" * 12 + struct.pack("<HHHH", 0, 0xDDD, 100, 1))
+    return conversations._netbios(
+        header + bytes([len(words) // 2]) + words + struct.pack("<H", len(data)) + data
+    )
+
+
+def negotiate_reply(flags2=0x4001, capabilities=0, domain="WORKGROUP", status=0):
+    challenge = b"8bytes!!"
+    words = struct.pack("<HBHHIIIIQhB", 0, 3, 50, 1, 16644, 65536, 0xC0FFEE, capabilities, 0,
+                        0, len(challenge))
+    encoding = "utf-16-le" if flags2 & UNICODE else "latin-1"
+    data = challenge + (domain + "\0").encode(encoding)
+    return smb_reply(0x72, words, data, flags2, status)
+
+
+def session_reply(*names: str, flags2=0x4001):
+    data = b""
+    if flags2 & UNICODE:
+        data = b"\0" + b"".join((n + "\0").encode("utf-16-le") for n in names)  # 1 byte pad
+    else:
+        data = b"".join((n + "\0").encode("latin-1") for n in names)
+    return smb_reply(0x73, struct.pack("<BBHH", 0xFF, 0, 0, 0), data, flags2)
+
+
+SAMBA = ("Unix", "Samba 3.0.20-Debian", "WORKGROUP")  # Metasploitable 2
+WINDOWS = ("Windows 7 Professional 7601 Service Pack 1", "Windows 7 Professional 6.1", "LAB")
+
+
+def fake_smb(requests: list[bytes], negotiate=None, session=None, netbios=False):
+    async def handler(reader, writer):
+        async def hear() -> bytes:
+            head = await reader.readexactly(4)
+            body = await reader.readexactly(int.from_bytes(head[1:], "big"))
+            requests.append(head + body)
+            return head
+
+        try:
+            if netbios:
+                await hear()
+                writer.write(b"\x82\0\0\0")
+            negotiate_ = negotiate_reply() if negotiate is None else negotiate
+            for reply in (negotiate_, session or session_reply(*SAMBA)):
+                await hear()
+                if not reply:  # an SMB1-less server just hangs up
+                    writer.close()
+                    return
+                writer.write(reply)
+                await writer.drain()
+            await reader.read()
+        except (asyncio.IncompleteReadError, ConnectionError):
+            pass
+        writer.close()
+
+    return handler
+
+
+def smb_talk(handler, monkeypatch=None, netbios=False):
+    async def client(port):
+        if netbios:
+            monkeypatch.setattr(conversations, "NETBIOS_SESSION_PORTS", {port})
+        return await smb_hello("127.0.0.1", port, False, 2.0)
+
+    return run_with_server(handler, client)
+
+
+def test_smb_names_from_samba():
+    requests: list[bytes] = []
+    text = smb_talk(fake_smb(requests))
+    assert text == (
+        "smb native os: Unix\nsmb lan manager: Samba 3.0.20-Debian\nsmb domain: WORKGROUP"
+    )
+    assert requests[0] == conversations.SMB_NEGOTIATE
+
+
+def test_smb_session_is_anonymous():
+    requests: list[bytes] = []
+    smb_talk(fake_smb(requests))
+    setup = requests[1][4:]
+    assert setup[4] == 0x73 and setup[32] == 13  # session setup, 13 words
+    words = setup[33:59]
+    session_key, oem_len, unicode_len = struct.unpack_from("<IHH", words, 10)
+    assert session_key == 0xC0FFEE  # echoed from the negotiate reply
+    assert (oem_len, unicode_len) == (0, 0)  # no passwords
+    assert setup[59:] == b"\x04\x00\0\0\0\0"  # 4 bytes of data: empty user and names
+
+
+def test_smb_names_in_unicode_from_windows():
+    text = smb_talk(fake_smb([], negotiate_reply(0x4001 | UNICODE, domain="LAB"),
+                             session_reply(*WINDOWS, flags2=0x4001 | UNICODE)))
+    assert text.splitlines() == [
+        "smb native os: Windows 7 Professional 7601 Service Pack 1",
+        "smb lan manager: Windows 7 Professional 6.1",
+        "smb domain: LAB",
+    ]
+
+
+def test_smb_on_netbios_port_sends_session_request_first(monkeypatch):
+    requests: list[bytes] = []
+    text = smb_talk(fake_smb(requests, netbios=True), monkeypatch, netbios=True)
+    assert requests[0] == conversations.SMB_SESSION_REQUEST
+    assert requests[0][:1] == b"\x81"
+    assert "Samba 3.0.20" in text
+
+
+def test_smb_domain_from_negotiate_when_session_gives_none():
+    text = smb_talk(fake_smb([], session=session_reply("Unix", "Samba 4.9.5-Debian")))
+    assert text.splitlines()[-1] == "smb domain: WORKGROUP"
+
+
+def test_smb_server_refusing_smb1():
+    refused = negotiate_reply(status=0xC00000BB)  # STATUS_NOT_SUPPORTED
+    assert smb_talk(fake_smb([], refused)) == ""
+    with pytest.raises(EOFError):  # most just hang up; add_versions treats that as no answer
+        smb_talk(fake_smb([], negotiate=b""))
+
+
+def test_smb_names_are_cleaned():
+    text = smb_talk(fake_smb([], session=session_reply("Unix\x1b[31m", "Samba\n3.0.20", "")))
+    native_os, lan_manager = text.splitlines()[:2]
+    assert native_os == r"smb native os: Unix\x1b[31m"  # escape code shown, not run
+    assert lan_manager == "smb lan manager: Samba 3.0.20"  # one line, can't fake another
+
+
+@pytest.mark.parametrize("names, product, version, extra, cpe", [
+    (SAMBA, "Samba smbd", "3.0.20", "Debian", "cpe:/a:samba:samba:3.0.20"),
+    (("Windows 6.1", "Samba 4.13.17-Ubuntu", "LAB"), "Samba smbd", "4.13.17", "Ubuntu",
+     "cpe:/a:samba:samba:4.13.17"),
+    (WINDOWS, "Microsoft Windows SMB", "", WINDOWS[0], ""),
+    (("Unix", "", "LAB"), "", "", "", ""),
+])
+def test_smb_fingerprints(names, product, version, extra, cpe):
+    banner = "\n".join(f"smb {label}: {value}" for label, value in
+                       zip(("native os", "lan manager", "domain"), names, strict=True) if value)
+    fp = identify(banner)
+    assert (fp.name, fp.product, fp.version, fp.extrainfo) == ("smb", product, version, extra)
+    assert fp.cpes == ([cpe] if cpe else [])
+
+
+def test_smb_windows_is_an_os_clue():
+    windows = svc(445, "smb", banner=f"smb native os: {WINDOWS[0]}")
+    assert clue_from(windows).distro == "Windows"
+    samba = svc(445, "smb", banner="smb lan manager: Samba 3.0.20-Debian")
+    assert clue_from(samba).distro == "Debian"
