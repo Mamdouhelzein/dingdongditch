@@ -15,6 +15,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import lru_cache
 
+from dingdongditch import binary_probes
 from dingdongditch.fingerprints import identify
 from dingdongditch.nmap_parser import Service
 from dingdongditch.ports import SERVICE_NAMES, TLS_PORTS
@@ -27,6 +28,7 @@ DEFAULT_CONCURRENCY = 100  # lower than the port scan: each grab holds a connect
 
 _QUIET_GAP = 0.3  # once a service has started talking, stop when it pauses this long
 _SLOW_GREETERS = {"ftp", "smtp", "submission", "pop3", "imap"}
+_NEVER_TALK_FIRST = {"domain"}  # binary protocols: ask straight away
 TIMEOUT_ERRORS = (asyncio.TimeoutError, TimeoutError)
 
 # Default service names (from ports.py) that speak HTTP, so a HEAD request fits.
@@ -56,6 +58,8 @@ def probe_for(host: str, port: int) -> bytes:
     name = SERVICE_NAMES.get(port)
     if name == "redis":
         return REDIS_PROBE
+    if name == "domain":
+        return binary_probes.DNS_VERSION_QUERY
     if name is None or any(web in name for web in _WEB_NAMES):
         return http_probe(host)  # unknown ports are most often web apps in labs
     return BLANK_PROBE
@@ -108,6 +112,12 @@ def clean_banner(raw: bytes) -> str:
         else:
             out.append(f"\\u{ord(ch):04x}")
     return "".join(out).strip()
+
+
+def to_text(raw: bytes) -> str:
+    """The banner to keep: a binary answer we asked for made readable, else `raw` cleaned."""
+    described = binary_probes.describe(raw)
+    return clean_banner(described.encode() if described is not None else raw)
 
 
 @lru_cache(maxsize=1)
@@ -182,6 +192,8 @@ async def _first_try(
     tried = {(use_tls, probe)}
     if SERVICE_NAMES.get(port) in _SLOW_GREETERS:
         listen = max(listen, GREETING_TIMEOUT)
+    elif SERVICE_NAMES.get(port) in _NEVER_TALK_FIRST:
+        listen = 0
     try:
         raw = await exchange(host, port, use_tls, probe, listen, timeout)
     except (*TIMEOUT_ERRORS, OSError):
@@ -194,8 +206,8 @@ async def _first_try(
         tried.add((True, probe))
         with contextlib.suppress(*TIMEOUT_ERRORS, OSError):
             tls_raw = await exchange(host, port, True, probe, listen, timeout)
-            return Banner(clean_banner(tls_raw), True), tried
-    return Banner(clean_banner(raw), use_tls), tried
+            return Banner(to_text(tls_raw), True), tried
+    return Banner(to_text(raw), use_tls), tried
 
 
 async def grab_banner(
@@ -224,7 +236,7 @@ async def grab_banner(
             raw = await exchange(host, port, use_tls, probe, _QUIET_GAP, timeout)
         except (*TIMEOUT_ERRORS, OSError):
             continue
-        text = clean_banner(raw)
+        text = to_text(raw)
         if identify(text):
             return Banner(text, use_tls)
         if text and not banner.text:

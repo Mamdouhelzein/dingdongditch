@@ -76,6 +76,15 @@ RULES: list[Rule] = [
     # HTTP/2-only servers (often gRPC) open with a SETTINGS frame:
     # 3-byte length, type 0x04, flags 0, stream 0.
     _r(r"^\\x00(?:\\x[0-9a-f]{2}|.){2}\\x04\\x00\\x00\\x00\\x00\\x00", "http2"),
+    # DNS servers answering our version.bind question (binary_probes.py).
+    # "9.11.5-P4-5.1+deb10u5-Debian": the version is "9.11.5-P4", the rest is packaging.
+    _r(r"^version\.bind: (?P<version>9\.\d+\.\d+(?:-P\d+)?)-?(?P<extra>\S*)", "domain",
+       "ISC BIND", "isc:bind"),
+    _r(r"^version\.bind: dnsmasq-" + _V, "domain", "dnsmasq", "thekelleys:dnsmasq"),
+    _r(r"^version\.bind: unbound " + _V, "domain", "Unbound", "nlnetlabs:unbound"),
+    _r(r"^version\.bind: PowerDNS Authoritative Server " + _V, "domain",
+       "PowerDNS Authoritative Server", "powerdns:authoritative"),
+    _r(r"^version\.bind:", "domain"),  # a DNS server that keeps its version to itself
     # Other
     _r(r"^:\S+ NOTICE AUTH\b", "irc"),
     _r(r"VMware Authentication Daemon Version " + _V, "vmware-auth",
