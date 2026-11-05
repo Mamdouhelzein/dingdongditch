@@ -54,7 +54,9 @@ def make_frame(size: int = 400, seed: int = 0) -> pd.DataFrame:
 
 def test_model_learns_the_giveaway_word():
     frame = make_frame()
-    model = train.fit(frame, CUTOFF, {"C": 1.0, "class_weight": "balanced"}, min_count=1)
+    model = train.fit(
+        frame, CUTOFF, {"kind": "logistic", "C": 1.0, "class_weight": "balanced"}, min_count=1
+    )
     test = evaluate.make_test_set(frame, CUTOFF)
     assert test.listed.any()
     measures = evaluate.measure(train.scores(model, frame)[test.rows], test.listed)
@@ -87,3 +89,21 @@ def test_trained_model_can_be_saved_and_reused():
     model = train.fit(frame, CUTOFF, train.GRID[0], min_count=1)
     again = pickle.loads(pickle.dumps(model))
     assert np.allclose(train.scores(model, frame), train.scores(again, frame))
+
+
+@pytest.mark.parametrize("settings", [train.LOGISTIC[0], train.XGBOOST[0], train.BEST])
+def test_every_kind_of_model_learns_the_giveaway_word(settings):
+    frame = make_frame()
+    model = train.fit(frame, CUTOFF, settings, min_count=1)
+    test = evaluate.make_test_set(frame, CUTOFF)
+    measures = evaluate.measure(train.scores(model, frame)[test.rows], test.listed)
+    assert measures["top 10%"] == 1.0
+
+
+def test_best_is_one_of_the_grid():
+    assert train.BEST in train.GRID
+
+
+def test_unknown_kind_is_refused():
+    with pytest.raises(ValueError, match="Unknown kind"):
+        train.fit(make_frame(), CUTOFF, {"kind": "magic"}, min_count=1)

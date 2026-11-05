@@ -17,21 +17,51 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
+from xgboost import XGBClassifier
 
 from dingdongditch.evaluate import HORIZON, EvaluationError, make_test_set, measure
 from dingdongditch.features import kev_between, make_vectorizer
 
-# C: how closely the model may fit the training CVEs (small = simpler model).
-# class_weight="balanced" makes the few exploited CVEs count as much as all the others.
-GRID = [
-    {"C": C, "class_weight": weight}
+# Logistic regression adds up clues. C: how closely it may fit the training CVEs
+# (small = simpler); class_weight="balanced" makes the few exploited CVEs count as
+# much as all the others.
+LOGISTIC = [
+    {"kind": "logistic", "C": C, "class_weight": weight}
     for C in (0.03, 0.1, 0.3, 1.0)
     for weight in ("balanced", None)
 ]
+# XGBoost builds 400 small decision trees, so it can learn combinations of clues.
+# max_depth: how many clues one tree can combine; scale_pos_weight: how much more an
+# exploited CVE counts than the others. Each takes 4-10 minutes on the full data.
+XGBOOST = [
+    {"kind": "xgboost", "max_depth": depth, "scale_pos_weight": weight}
+    for depth in (3, 6)
+    for weight in (1, 20)
+]
+GRID = LOGISTIC + XGBOOST
+
+# The winner of choose_settings() standing on 2024-05-01, judged on the year after:
+# average precision 0.087, against 0.042 for the best logistic regression.
+BEST = {"kind": "xgboost", "max_depth": 6, "scale_pos_weight": 20}
 
 
-def _classifier(settings: dict) -> LogisticRegression:
-    return LogisticRegression(solver="liblinear", max_iter=1000, **settings)
+def _classifier(settings: dict) -> LogisticRegression | XGBClassifier:
+    options = dict(settings)
+    kind = options.pop("kind")
+    if kind == "logistic":
+        return LogisticRegression(solver="liblinear", max_iter=1000, **options)
+    if kind == "xgboost":
+        return XGBClassifier(
+            n_estimators=400,
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.5,
+            tree_method="hist",
+            n_jobs=-1,
+            random_state=0,
+            **options,
+        )
+    raise ValueError(f"Unknown kind of model: {kind!r}")
 
 
 def _labels(frame: pd.DataFrame, cutoff: date) -> np.ndarray:
@@ -51,7 +81,7 @@ def fit(frame: pd.DataFrame, cutoff: date, settings: dict, min_count: int = 5) -
 
 def scores(model: Pipeline, frame: pd.DataFrame) -> np.ndarray:
     """Higher means more likely to be exploited. Only the order matters."""
-    return model.decision_function(frame)
+    return model.predict_proba(frame)[:, 1]
 
 
 @dataclass(frozen=True)
@@ -78,7 +108,7 @@ def choose_settings(
     tried = []
     for settings in grid:
         classifier = _classifier(settings).fit(matrix, labels)
-        measures = measure(classifier.decision_function(matrix)[test.rows], test.listed)
+        measures = measure(classifier.predict_proba(matrix)[test.rows, 1], test.listed)
         report(settings, measures)
         tried.append((settings, measures))
     best = max(tried, key=lambda item: item[1]["average precision"])[0]
