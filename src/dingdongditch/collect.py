@@ -35,13 +35,17 @@ class DownloadError(Exception):
     """A source couldn't be downloaded or wasn't in the expected format."""
 
 
+class NotFound(DownloadError):
+    """The server says the file doesn't exist (HTTP 404)."""
+
+
 def new_session() -> requests.Session:
     session = requests.Session()
     session.headers["User-Agent"] = USER_AGENT
     return session
 
 
-def _get(session: requests.Session, url: str) -> requests.Response:
+def fetch(session: requests.Session, url: str) -> requests.Response:
     """GET a URL, trying again a few times if the server is busy or the network blips."""
     wait = RETRY_WAIT
     for attempt in range(TRIES):
@@ -53,6 +57,8 @@ def _get(session: requests.Session, url: str) -> requests.Response:
             if resp.status_code == 200:
                 return resp
             problem = f"HTTP {resp.status_code}"
+            if resp.status_code == 404:
+                raise NotFound(f"Couldn't download {url}: {problem}")
             if resp.status_code not in _TRY_AGAIN:
                 break
         if attempt < TRIES - 1:
@@ -61,7 +67,7 @@ def _get(session: requests.Session, url: str) -> requests.Response:
     raise DownloadError(f"Couldn't download {url}: {problem}")
 
 
-def _now() -> str:
+def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
@@ -85,7 +91,7 @@ def parse_kev(data: dict) -> list[tuple[str, str, str, str, str, str]]:
 
 def update_kev(con: sqlite3.Connection, session: requests.Session) -> int:
     """Replace the kev table with CISA's current list. Returns how many CVEs it has."""
-    resp = _get(session, KEV_URL)
+    resp = fetch(session, KEV_URL)
     try:
         data = resp.json()
     except ValueError as exc:
@@ -95,7 +101,7 @@ def update_kev(con: sqlite3.Connection, session: requests.Session) -> int:
         con.execute("DELETE FROM kev")
         con.executemany("INSERT OR REPLACE INTO kev VALUES (?, ?, ?, ?, ?, ?)", rows)
         set_meta(con, "kev_version", str(data.get("catalogVersion", "")))
-        set_meta(con, "kev_updated", _now())
+        set_meta(con, "kev_updated", utc_now())
     return len(rows)
 
 
@@ -132,13 +138,13 @@ def parse_epss(text: str) -> tuple[dict[str, str], list[tuple[str, float, float]
 
 def update_epss(con: sqlite3.Connection, session: requests.Session) -> int:
     """Replace the epss table with today's scores. Returns how many CVEs were scored."""
-    notes, rows = parse_epss(_unzip(_get(session, EPSS_URL).content, "EPSS"))
+    notes, rows = parse_epss(_unzip(fetch(session, EPSS_URL).content, "EPSS"))
     with con:
         con.execute("DELETE FROM epss")
         con.executemany("INSERT OR REPLACE INTO epss VALUES (?, ?, ?)", rows)
         set_meta(con, "epss_model", notes.get("model_version", ""))
         set_meta(con, "epss_date", notes.get("score_date", ""))
-        set_meta(con, "epss_updated", _now())
+        set_meta(con, "epss_updated", utc_now())
     return len(rows)
 
 
@@ -177,9 +183,9 @@ def parse_exploitdb(text: str) -> list[tuple[int, str, str, str, str, int]]:
 
 def update_exploitdb(con: sqlite3.Connection, session: requests.Session) -> int:
     """Replace the exploitdb table. Returns how many CVEs have at least one public exploit."""
-    rows = parse_exploitdb(_unzip(_get(session, EXPLOITDB_URL).content, "Exploit-DB"))
+    rows = parse_exploitdb(_unzip(fetch(session, EXPLOITDB_URL).content, "Exploit-DB"))
     with con:
         con.execute("DELETE FROM exploitdb")
         con.executemany("INSERT INTO exploitdb VALUES (?, ?, ?, ?, ?, ?)", rows)
-        set_meta(con, "exploitdb_updated", _now())
+        set_meta(con, "exploitdb_updated", utc_now())
     return len({row[1] for row in rows})
