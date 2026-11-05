@@ -12,6 +12,9 @@ dingdongditch \- find open ports on hosts you own, and work out what is behind t
 .I report
 .br
 .B dingdongditch update\-db
+.RB [ \-\-db
+.IR file ]
+.RB [ \-\-full ]
 .br
 .B dingdongditch
 .RB [ \-V | \-\-version ]
@@ -56,8 +59,10 @@ as
 to read from standard input.
 .TP
 .B update\-db
-Download CVE data.
-Not implemented yet: it prints a message and exits with status 1.
+Download the public vulnerability data into a local database, or bring it up
+to date.
+See
+.BR DATABASE .
 .SH OPTIONS
 .SS Scan options
 .TP
@@ -114,6 +119,17 @@ Print JSON instead of a table.
 Only the JSON goes to standard output, so it can be piped.
 Also accepted by
 .BR analyze .
+.SS update\-db options
+.TP
+.B \-\-db \fIfile\fR
+Use this database file instead of the default.
+See
+.BR DATABASE .
+.TP
+.B \-\-full
+Check every year of NVD data for changes, not just the last week's.
+Without it, a run within a week of the last one only reads NVD's list of
+recent changes.
 .SS General options
 .TP
 .BR \-V ", " \-\-version
@@ -258,6 +274,50 @@ firewall, and the scan prints a warning.
 .PP
 Silent FTP and mail ports are given up to 12 seconds to greet, because some
 servers delay their greeting.
+.SH DATABASE
+.B update\-db
+downloads four free public sources into one SQLite file:
+.TP
+.B NVD
+Every CVE, with its description, CVSS scores, weakness types (CWE) and the
+products and versions it affects, from the yearly JSON feeds of the US National
+Vulnerability Database.
+.TP
+.B CISA KEV
+The CVEs that attackers are known to have really exploited.
+.TP
+.B Exploit\-DB
+Which CVEs have public exploit code.
+Only the index is downloaded, never the code itself.
+.TP
+.B EPSS
+FIRST.org's daily estimate of how likely each CVE is to be exploited in the next
+30 days.
+.PP
+The first run downloads about 260 MB, takes 10 to 15 minutes, and makes a file
+of about 750 MB.
+Later runs only fetch what changed.
+Each source is saved in one step, so if a download fails, that source keeps its
+old data and the others are still updated.
+.PP
+The file is
+.I vulns.db
+in a
+.I dingdongditch
+folder in
+.B $XDG_DATA_HOME
+(normally
+.IR ~/.local/share )
+on Linux,
+.I ~/Library/Application Support
+on macOS and
+.B %LOCALAPPDATA%
+on Windows.
+Set
+.B DINGDONGDITCH_DB
+to a file name, or use
+.BR \-\-db ,
+to put it somewhere else.
 .SH LIMITATIONS
 .IP \(bu 2
 TCP only, so UDP services such as SNMP are not seen.
@@ -280,8 +340,8 @@ often patch old versions without changing the number.
 Success, including a scan that found no open ports.
 .TP
 .B 1
-The scan failed, a file was not found or is not an nmap report, or the command
-is not implemented yet.
+The scan failed, a file was not found or is not an nmap report, the database
+could not be opened, or a data source could not be downloaded.
 .TP
 .B 2
 The command line was wrong.
@@ -313,8 +373,21 @@ Read that report later.
 .TP
 .B nmap \-sV \-oX \- 192.168.195.130 | dingdongditch analyze \-
 Read a report straight from nmap.
+.TP
+.B dingdongditch update\-db
+Download the vulnerability data, or bring it up to date.
+.TP
+.B dingdongditch update\-db \-\-db ~/lab/vulns.db \-\-full
+Use another database file and check every year of NVD data.
+.SH ENVIRONMENT
+.TP
+.B DINGDONGDITCH_DB
+The database file to use when
+.B \-\-db
+is not given.
 .SH SEE ALSO
-.BR nmap (1)
+.BR nmap (1),
+.BR sqlite3 (1)
 .SH BUGS
 Report bugs on
 .UR https://github.com/Mamdouhelzein/dingdongditch/issues

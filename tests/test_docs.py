@@ -45,8 +45,14 @@ def test_readme_has_every_option(option):
 
 
 @pytest.mark.parametrize("line", [
-    *re.findall(r"^dingdongditch ((?:scan|analyze) .+?)(?:\s+#.*)?$", README, re.MULTILINE),
-    *re.findall(r"^\.B dingdongditch ((?:scan|analyze) .+)$", MAN, re.MULTILINE),
+    *re.findall(
+        r"^dingdongditch ((?:scan|analyze) .+?|update-db(?: .+?)?)(?:\s+#.*)?$",
+        README,
+        re.MULTILINE,
+    ),
+    *re.findall(
+        r"^\.B dingdongditch ((?:scan|analyze) .+|update-db(?: .+)?)$", MAN, re.MULTILINE
+    ),
 ])
 def test_examples_are_valid_commands(line):
     command, *args = shlex.split(line)

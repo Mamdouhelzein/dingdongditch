@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import json
+import sqlite3
 import subprocess
 import sys
 from enum import Enum
@@ -21,7 +22,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from dingdongditch import __version__, nmap_scanner, own_scanner
+from dingdongditch import __version__, collect, db, nmap_scanner, nvd, own_scanner
 from dingdongditch.connect_scan import (
     DEFAULT_CONCURRENCY,
     DEFAULT_TIMEOUT,
@@ -270,10 +271,68 @@ def analyze(
 
 
 @app.command("update-db")
-def update_db() -> None:
-    """Download / refresh CVE data (NVD, CISA KEV, Exploit-DB)."""
-    err.print("[yellow]Not implemented yet. Coming in Phase 1 (data collection).[/yellow]")
-    raise typer.Exit(1)
+def update_db(
+    db_path: Path = typer.Option(
+        None, "--db",
+        help=f"Database file. Default: ${db.ENV_VAR} if set, else a per-user data folder.",
+    ),
+    full: bool = typer.Option(
+        False, "--full",
+        help="Check every year of NVD data, not just the last week's changes.",
+    ),
+) -> None:
+    """Download or refresh the vulnerability data (NVD, CISA KEV, Exploit-DB, EPSS)."""
+    path = db_path or db.default_path()
+    try:
+        con = db.connect(path)
+    except (db.DatabaseError, OSError) as exc:
+        err.print(f"[red]Can't open the database:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    def nvd_progress(name: str, count: int | None) -> None:
+        news = "unchanged" if count is None else f"{count:,} CVEs"
+        err.print(f"  NVD {name}: {news}", style="dim")
+
+    session = collect.new_session()
+    steps = [
+        ("CISA KEV", "exploited CVEs", lambda: collect.update_kev(con, session)),
+        ("EPSS", "scored CVEs", lambda: collect.update_epss(con, session)),
+        ("Exploit-DB", "CVEs with a public exploit",
+         lambda: collect.update_exploitdb(con, session)),
+        ("NVD", "CVEs added or changed",
+         lambda: nvd.update_nvd(con, session, full=full, report=nvd_progress)),
+    ]
+    failed = False
+    try:
+        for name, what, step in steps:
+            try:
+                with err.status(f"Downloading {name}..."):
+                    count = step()
+            except (collect.DownloadError, sqlite3.Error) as exc:
+                err.print(f"[red]{name} failed:[/red] {exc}")
+                failed = True
+            else:
+                console.print(f"{name}: {count:,} {what}")
+        totals = [
+            (label, con.execute(f"SELECT COUNT(DISTINCT {column}) FROM {table}").fetchone()[0])
+            for label, table, column in (
+                ("CVEs", "cve", "id"),
+                ("Products", "cve_cpe", "vendor || ':' || product"),
+                ("Exploited (KEV)", "kev", "cve_id"),
+                ("With a public exploit", "exploitdb", "cve_id"),
+                ("With an EPSS score", "epss", "cve_id"),
+            )
+        ]
+    finally:
+        con.close()
+    console.print(f"\nDatabase: {escape(str(path))}", soft_wrap=True)
+    for label, count in totals:
+        console.print(f"  {label}: {count:,}")
+    if failed:
+        err.print(
+            "[yellow]Some sources failed. Their old data was kept; run it again later.[/yellow]"
+        )
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":

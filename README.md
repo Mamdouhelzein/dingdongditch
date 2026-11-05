@@ -9,7 +9,7 @@
 
 A port scanner written from scratch in Python. It finds open TCP ports, works out which service and version is behind each one, and proves common misconfigurations without exploiting anything.
 
-**Status:** the scanner works. The machine learning part, which will predict which CVEs are most likely to be exploited, isn't built yet, so the Risk column only shows confirmed problems for now.
+**Status:** the scanner works, and `update-db` downloads the vulnerability data. The machine learning part, which will predict which CVEs are most likely to be exploited, isn't built yet, so the Risk column only shows confirmed problems for now.
 
 ## What it looks like
 
@@ -91,6 +91,25 @@ nmap -sV -oX - 192.168.195.130 | dingdongditch analyze -
 
 **Finding fewer ports than you expected?** It's probably going too fast for that machine or network. Slow it down with `-c 100 -t 3`.
 
+## Vulnerability data
+
+`update-db` downloads four free public sources into one local database file:
+
+| Source | What it adds |
+|---|---|
+| [NVD](https://nvd.nist.gov/) | Every CVE: description, CVSS scores, weakness type, and the products and versions it affects |
+| [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) | The CVEs attackers really exploited |
+| [Exploit-DB](https://www.exploit-db.com/) | Which CVEs have public exploit code (only the index is downloaded, never the code) |
+| [EPSS](https://www.first.org/epss/) | The daily chance that each CVE gets exploited in the next 30 days |
+
+```bash
+dingdongditch update-db                       # first run: 260 MB download, 10-15 minutes
+dingdongditch update-db --full                # check every year of NVD data again
+dingdongditch update-db --db ~/lab/vulns.db   # use another database file
+```
+
+Later runs only fetch what changed. If one source fails to download, it keeps its old data and the others still update. The file is `vulns.db` in your user data folder (`~/.local/share/dingdongditch/` on Linux); set `DINGDONGDITCH_DB` to keep it somewhere else. Scans don't use it yet: matching services to CVEs is Part 4.
+
 ## Karen mode
 
 `--karen-mode` demands to speak to every port's manager.
@@ -151,7 +170,7 @@ Other limits:
 
 - [x] **Part 1:** built-in scanner, Karen mode and safe checks
 - [ ] Finish lab testing on Vulhub
-- [ ] **Part 2:** collect data from NVD, CISA KEV, Exploit-DB and EPSS (`dingdongditch update-db`)
+- [x] **Part 2:** collect data from NVD, CISA KEV, Exploit-DB and EPSS (`dingdongditch update-db`)
 - [ ] **Part 3:** train a model on which CVEs really got exploited, and compare it with CVSS and EPSS
 - [ ] **Part 4:** match services to CVEs and show a risk score per port, with why and how to fix it
 - [ ] **Part 5:** demo GIF and PyPI release
@@ -178,7 +197,10 @@ src/dingdongditch/
   own_scanner.py   # runs the steps above in order
   nmap_scanner.py  # the optional nmap engine
   nmap_parser.py   # nmap XML → services
-  collect.py, features.py, train.py, matcher.py, scorer.py  # not built yet
+  db.py            # the local vulnerability database (SQLite)
+  collect.py       # downloads CISA KEV, EPSS and the Exploit-DB index
+  nvd.py           # downloads NVD's CVE feeds, one CVE at a time
+  features.py, train.py, matcher.py, scorer.py  # not built yet
   data/            # PostgreSQL error line -> release table
 man/               # the man page
 scripts/           # rebuilds the PostgreSQL table from its source
