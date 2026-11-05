@@ -7,6 +7,8 @@ download leaves the old data in place.
 
 from __future__ import annotations
 
+import csv
+import gzip
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -17,6 +19,7 @@ from dingdongditch import __version__
 from dingdongditch.db import set_meta
 
 KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+EPSS_URL = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
 
 USER_AGENT = f"dingdongditch/{__version__} (+https://github.com/Mamdouhelzein/dingdongditch)"
 TIMEOUT = 60.0
@@ -90,4 +93,47 @@ def update_kev(con: sqlite3.Connection, session: requests.Session) -> int:
         con.executemany("INSERT OR REPLACE INTO kev VALUES (?, ?, ?, ?, ?, ?)", rows)
         set_meta(con, "kev_version", str(data.get("catalogVersion", "")))
         set_meta(con, "kev_updated", _now())
+    return len(rows)
+
+
+def _unzip(body: bytes, what: str) -> str:
+    """Gunzip a download if it's still zipped, and decode it as text."""
+    try:
+        if body[:2] == b"\x1f\x8b":
+            body = gzip.decompress(body)
+        return body.decode("utf-8")
+    except (OSError, EOFError, UnicodeDecodeError) as exc:
+        raise DownloadError(f"The {what} download is damaged: {exc}") from exc
+
+
+def parse_epss(text: str) -> tuple[dict[str, str], list[tuple[str, float, float]]]:
+    """The EPSS CSV -> (notes from its first line, rows for the epss table).
+
+    The first line looks like `#model_version:v2026.06.15,score_date:2026-11-05T12:03:04Z`.
+    """
+    lines = text.splitlines()
+    notes = {}
+    if lines and lines[0].startswith("#"):
+        for part in lines.pop(0)[1:].split(","):
+            key, _, value = part.partition(":")
+            notes[key.strip()] = value.strip()
+    reader = csv.reader(lines)
+    if next(reader, None) != ["cve", "epss", "percentile"]:
+        raise DownloadError("The EPSS scores weren't in the expected format: unknown columns")
+    try:
+        rows = [(cve, float(score), float(percentile)) for cve, score, percentile in reader]
+    except ValueError as exc:
+        raise DownloadError(f"The EPSS scores weren't in the expected format: {exc}") from exc
+    return notes, rows
+
+
+def update_epss(con: sqlite3.Connection, session: requests.Session) -> int:
+    """Replace the epss table with today's scores. Returns how many CVEs were scored."""
+    notes, rows = parse_epss(_unzip(_get(session, EPSS_URL).content, "EPSS"))
+    with con:
+        con.execute("DELETE FROM epss")
+        con.executemany("INSERT OR REPLACE INTO epss VALUES (?, ?, ?)", rows)
+        set_meta(con, "epss_model", notes.get("model_version", ""))
+        set_meta(con, "epss_date", notes.get("score_date", ""))
+        set_meta(con, "epss_updated", _now())
     return len(rows)

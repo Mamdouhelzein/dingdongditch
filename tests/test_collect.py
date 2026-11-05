@@ -1,5 +1,6 @@
 """The downloaders, fed by a fake session so no test touches the internet."""
 
+import gzip
 import json
 
 import pytest
@@ -123,3 +124,62 @@ def test_bad_kev_keeps_the_old_data(con, body):
     with pytest.raises(collect.DownloadError, match="KEV"):
         collect.update_kev(con, kev_session(FakeResponse(body=body)))
     assert con.execute("SELECT COUNT(*) FROM kev").fetchone()[0] == 2
+
+
+EPSS_CSV = (
+    "#model_version:v2026.06.15,score_date:2026-11-05T12:03:04Z\n"
+    "cve,epss,percentile\n"
+    "CVE-1999-0001,0.04753,0.91915\n"
+    "CVE-2011-2523,0.94012,0.99920\n"
+)
+
+
+def epss_session(*answers):
+    return FakeSession({collect.EPSS_URL: list(answers)})
+
+
+def test_epss_reads_the_notes_and_scores():
+    notes, rows = collect.parse_epss(EPSS_CSV)
+    assert notes == {"model_version": "v2026.06.15", "score_date": "2026-11-05T12:03:04Z"}
+    assert rows == [("CVE-1999-0001", 0.04753, 0.91915), ("CVE-2011-2523", 0.94012, 0.9992)]
+
+
+def test_epss_without_notes_line_still_works():
+    notes, rows = collect.parse_epss(EPSS_CSV.split("\n", 1)[1])
+    assert notes == {}
+    assert len(rows) == 2
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "cve,score\nCVE-1-1,0.1\n",
+        "cve,epss,percentile\nCVE-1-1,high,0.5\n",
+        "cve,epss,percentile\nX\n",
+    ],
+)
+def test_epss_in_another_format_is_refused(text):
+    with pytest.raises(collect.DownloadError, match="EPSS"):
+        collect.parse_epss(text)
+
+
+def test_epss_gzipped_download_fills_the_table(con):
+    body = gzip.compress(EPSS_CSV.encode())
+    assert collect.update_epss(con, epss_session(FakeResponse(body=body))) == 2
+    assert con.execute("SELECT score FROM epss WHERE cve_id = 'CVE-2011-2523'").fetchone() == (
+        0.94012,
+    )
+    assert db.get_meta(con, "epss_model") == "v2026.06.15"
+    assert db.get_meta(con, "epss_date") == "2026-11-05T12:03:04Z"
+
+
+def test_epss_already_unzipped_download_also_works(con):
+    assert collect.update_epss(con, epss_session(FakeResponse(body=EPSS_CSV.encode()))) == 2
+
+
+def test_damaged_epss_download_keeps_the_old_data(con):
+    collect.update_epss(con, epss_session(FakeResponse(body=gzip.compress(EPSS_CSV.encode()))))
+    broken = gzip.compress(EPSS_CSV.encode())[:-20]
+    with pytest.raises(collect.DownloadError, match="damaged"):
+        collect.update_epss(con, epss_session(FakeResponse(body=broken)))
+    assert con.execute("SELECT COUNT(*) FROM epss").fetchone()[0] == 2
