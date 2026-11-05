@@ -10,7 +10,7 @@ from dingdongditch import db
 def test_new_database_has_every_table():
     con = db.connect(":memory:")
     tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert tables == {"meta", "cve", "cve_cpe", "kev", "epss", "exploitdb"}
+    assert tables == {"meta", "cve", "cve_cpe", "kev", "epss", "exploitdb", "epss_history"}
     assert con.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
 
 
@@ -62,3 +62,18 @@ def test_default_path_is_per_user(monkeypatch):
     if sys.platform not in ("win32", "darwin"):
         monkeypatch.setenv("XDG_DATA_HOME", "/data")
         assert db.default_path() == Path("/data/dingdongditch/vulns.db")
+
+
+def test_version_1_database_is_upgraded_and_keeps_its_data(tmp_path):
+    path = tmp_path / "vulns.db"
+    con = sqlite3.connect(path)
+    con.executescript(db.SCHEMA.replace(db.EPSS_HISTORY, ""))
+    con.execute("INSERT INTO kev VALUES ('CVE-1', 'v', 'p', 'n', 'd', 'Known')")
+    con.execute("PRAGMA user_version = 1")
+    con.commit()
+    con.close()
+    con = db.connect(path)
+    assert con.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
+    assert con.execute("SELECT COUNT(*) FROM epss_history").fetchone() == (0,)
+    assert con.execute("SELECT cve_id FROM kev").fetchall() == [("CVE-1",)]
+    con.close()

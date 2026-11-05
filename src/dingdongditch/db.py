@@ -5,6 +5,7 @@ Tables:
   cve_cpe    which products and versions each CVE affects (NVD's vulnerable CPE matches)
   kev        CISA's list of CVEs that were really exploited (the answer key for training)
   epss       FIRST.org's daily chance-of-exploitation score (what our model is compared with)
+  epss_history  EPSS scores from chosen past dates, for a fair comparison
   exploitdb  public exploits from Exploit-DB and the CVEs they target (ids only, no code)
   meta       when each source was last downloaded, and similar notes
 """
@@ -16,7 +17,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 ENV_VAR = "DINGDONGDITCH_DB"  # set it to use a different database file
 
 SCHEMA = """
@@ -83,6 +84,21 @@ CREATE TABLE exploitdb (
 CREATE INDEX exploitdb_cve ON exploitdb (cve_id);
 """
 
+# Added in version 2. Old EPSS scores let us compare with EPSS as it was on a past
+# date, before it could know which CVEs CISA would list later.
+EPSS_HISTORY = """
+CREATE TABLE epss_history (
+    date       TEXT NOT NULL,              -- YYYY-MM-DD
+    cve_id     TEXT NOT NULL,
+    score      REAL NOT NULL,
+    percentile REAL NOT NULL,
+    PRIMARY KEY (date, cve_id)
+);
+"""
+SCHEMA += EPSS_HISTORY
+
+UPGRADES = {1: EPSS_HISTORY}  # version -> SQL that brings it to the next version
+
 
 class DatabaseError(Exception):
     """The database file can't be used as it is."""
@@ -114,10 +130,16 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
             with con:
                 con.executescript(SCHEMA)
                 con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            version = SCHEMA_VERSION
+        while version in UPGRADES:
+            with con:
+                con.executescript(UPGRADES[version])
+                version += 1
+                con.execute(f"PRAGMA user_version = {version}")
     except sqlite3.DatabaseError as exc:
         con.close()
         raise DatabaseError(f"{path} is not a dingdongditch database: {exc}") from exc
-    if version not in (0, SCHEMA_VERSION):
+    if version != SCHEMA_VERSION:
         con.close()
         raise DatabaseError(
             f"{path} was made by a different version of dingdongditch. "

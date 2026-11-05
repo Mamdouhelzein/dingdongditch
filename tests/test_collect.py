@@ -2,6 +2,7 @@
 
 import gzip
 import json
+from datetime import date
 
 import pytest
 import requests
@@ -195,3 +196,35 @@ def test_exploitdb_download_fills_the_table(con):
     assert collect.update_exploitdb(con, session) == 4
     assert con.execute("SELECT COUNT(*) FROM exploitdb").fetchone()[0] == 4
     assert db.get_meta(con, "exploitdb_updated")
+
+
+OLD_EPSS_CSV = "cve,epss\nCVE-1,0.5\nCVE-2,0.1\nCVE-3,0.5\nCVE-4,0.9\n"
+
+
+def test_oldest_epss_files_get_a_worked_out_percentile():
+    notes, rows = collect.parse_epss(OLD_EPSS_CSV)
+    assert notes == {}
+    assert rows == [("CVE-1", 0.5, 0.75), ("CVE-2", 0.1, 0.25), ("CVE-3", 0.5, 0.75),
+                    ("CVE-4", 0.9, 1.0)]
+
+
+def test_epss_history_keeps_each_day_apart(con):
+    may, june = date(2025, 5, 1), date(2025, 6, 1)
+    session = FakeSession({
+        collect.epss_url(may): [FakeResponse(body=gzip.compress(EPSS_CSV.encode()))] * 2,
+        collect.epss_url(june): [FakeResponse(body=gzip.compress(OLD_EPSS_CSV.encode()))],
+    })
+    assert collect.update_epss_history(con, session, may) == 2
+    assert collect.update_epss_history(con, session, june) == 4
+    assert collect.update_epss_history(con, session, may) == 2  # again: replaced, not doubled
+    counts = con.execute("SELECT date, COUNT(*) FROM epss_history GROUP BY date").fetchall()
+    assert counts == [("2025-05-01", 2), ("2025-06-01", 4)]
+    assert db.get_meta(con, "epss_model_2025-05-01") == "v2026.06.15"
+    assert collect.epss_url(may).endswith("/epss_scores-2025-05-01.csv.gz")
+
+
+def test_epss_history_for_a_day_without_scores_is_refused(con):
+    day = date(2030, 1, 1)
+    session = FakeSession({collect.epss_url(day): [FakeResponse(403)]})
+    with pytest.raises(collect.DownloadError, match="no scores for 2030-01-01"):
+        collect.update_epss_history(con, session, day)

@@ -7,13 +7,14 @@ download leaves the old data in place.
 
 from __future__ import annotations
 
+import bisect
 import csv
 import gzip
 import io
 import re
 import sqlite3
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import requests
 
@@ -36,7 +37,7 @@ class DownloadError(Exception):
 
 
 class NotFound(DownloadError):
-    """The server says the file doesn't exist (HTTP 404)."""
+    """The server says the file doesn't exist."""
 
 
 def new_session() -> requests.Session:
@@ -45,8 +46,14 @@ def new_session() -> requests.Session:
     return session
 
 
-def fetch(session: requests.Session, url: str) -> requests.Response:
-    """GET a URL, trying again a few times if the server is busy or the network blips."""
+def fetch(
+    session: requests.Session, url: str, missing: tuple[int, ...] = (404,)
+) -> requests.Response:
+    """GET a URL, trying again a few times if the server is busy or the network blips.
+
+    A status in `missing` raises NotFound. Some file stores answer 403 for files
+    that don't exist, so callers that use one can add it.
+    """
     wait = RETRY_WAIT
     for attempt in range(TRIES):
         try:
@@ -57,7 +64,7 @@ def fetch(session: requests.Session, url: str) -> requests.Response:
             if resp.status_code == 200:
                 return resp
             problem = f"HTTP {resp.status_code}"
-            if resp.status_code == 404:
+            if resp.status_code in missing:
                 raise NotFound(f"Couldn't download {url}: {problem}")
             if resp.status_code not in _TRY_AGAIN:
                 break
@@ -119,6 +126,8 @@ def parse_epss(text: str) -> tuple[dict[str, str], list[tuple[str, float, float]
     """The EPSS CSV -> (notes from its first line, rows for the epss table).
 
     The first line looks like `#model_version:v2026.06.15,score_date:2026-11-05T12:03:04Z`.
+    Files from before about June 2021 have no notes line and no percentile column, so
+    the percentile is worked out here: the share of CVEs scored the same or lower.
     """
     lines = text.splitlines()
     notes = {}
@@ -127,13 +136,46 @@ def parse_epss(text: str) -> tuple[dict[str, str], list[tuple[str, float, float]
             key, _, value = part.partition(":")
             notes[key.strip()] = value.strip()
     reader = csv.reader(lines)
-    if next(reader, None) != ["cve", "epss", "percentile"]:
-        raise DownloadError("The EPSS scores weren't in the expected format: unknown columns")
+    header = next(reader, None)
     try:
-        rows = [(cve, float(score), float(percentile)) for cve, score, percentile in reader]
+        if header == ["cve", "epss", "percentile"]:
+            rows = [(cve, float(score), float(percentile)) for cve, score, percentile in reader]
+        elif header == ["cve", "epss"]:
+            scored = [(cve, float(score)) for cve, score in reader]
+            ranked = sorted(score for _, score in scored)
+            rows = [
+                (cve, score, bisect.bisect_right(ranked, score) / len(ranked))
+                for cve, score in scored
+            ]
+        else:
+            raise ValueError(f"unknown columns {header}")
     except ValueError as exc:
         raise DownloadError(f"The EPSS scores weren't in the expected format: {exc}") from exc
     return notes, rows
+
+
+def epss_url(day: date) -> str:
+    """Where EPSS keeps the scores it gave on one past day."""
+    return f"https://epss.empiricalsecurity.com/epss_scores-{day.isoformat()}.csv.gz"
+
+
+def update_epss_history(con: sqlite3.Connection, session: requests.Session, day: date) -> int:
+    """Save the EPSS scores from one past day in epss_history. Returns how many CVEs."""
+    try:
+        resp = fetch(session, epss_url(day), missing=(403, 404))  # EPSS answers 403
+    except NotFound as exc:
+        raise DownloadError(f"EPSS has no scores for {day.isoformat()}") from exc
+    notes, rows = parse_epss(_unzip(resp.content, "EPSS"))
+    if not rows:
+        raise DownloadError(f"EPSS has no scores for {day.isoformat()}")
+    with con:
+        con.execute("DELETE FROM epss_history WHERE date = ?", (day.isoformat(),))
+        con.executemany(
+            "INSERT OR REPLACE INTO epss_history VALUES (?, ?, ?, ?)",
+            [(day.isoformat(), *row) for row in rows],
+        )
+        set_meta(con, f"epss_model_{day.isoformat()}", notes.get("model_version", ""))
+    return len(rows)
 
 
 def update_epss(con: sqlite3.Connection, session: requests.Session) -> int:
