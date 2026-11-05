@@ -183,3 +183,42 @@ def test_damaged_epss_download_keeps_the_old_data(con):
     with pytest.raises(collect.DownloadError, match="damaged"):
         collect.update_epss(con, epss_session(FakeResponse(body=broken)))
     assert con.execute("SELECT COUNT(*) FROM epss").fetchone()[0] == 2
+
+
+EDB_CSV = (
+    "id,file,description,date_published,author,type,platform,port,date_added,date_updated,"
+    "verified,codes,tags,aliases,screenshot_url,application_url,source_url\n"
+    '17491,exploits/unix/remote/17491.rb,"vsftpd 2.3.4 - Backdoor Command Execution",'
+    "2011-07-05,Metasploit,remote,unix,,2011-07-05,2011-07-05,1,CVE-2011-2523;OSVDB-73573,,,,,\n"
+    '16320,exploits/unix/remote/16320.rb,"Samba ""username map script"", with a\nnewline",'
+    "2010-05-17,Metasploit,remote,unix,,2010-05-17,2010-05-17,0,"
+    "CVE-2007-2447;cve-2007-2447,,,,,\n"
+    '1,exploits/x/1.txt,"No CVE at all",2000-01-01,x,dos,linux,,2000-01-01,2000-01-01,1,'
+    "OSVDB-1;CVE-n/a,,,,,\n"
+    '2,exploits/x/2.txt,"Typo in the CVE",2015-01-01,x,local,linux,,2015-01-01,2015-01-01,1,'
+    '"CVE-2015- 5698;CVE-2019\ufffd9193",,,,,\n'
+)
+
+
+def test_exploitdb_keeps_one_row_per_exploit_and_cve():
+    rows = sorted(collect.parse_exploitdb(EDB_CSV))
+    assert rows == [
+        (2, "CVE-2015-5698", "2015-01-01", "local", "linux", 1),
+        (2, "CVE-2019-9193", "2015-01-01", "local", "linux", 1),
+        (16320, "CVE-2007-2447", "2010-05-17", "remote", "unix", 0),
+        (17491, "CVE-2011-2523", "2011-07-05", "remote", "unix", 1),
+    ]
+
+
+def test_exploitdb_in_another_format_is_refused():
+    with pytest.raises(collect.DownloadError, match="Exploit-DB"):
+        collect.parse_exploitdb("id,name\n1,x\n")
+    with pytest.raises(collect.DownloadError, match="Exploit-DB"):
+        collect.parse_exploitdb(EDB_CSV.replace("17491,", "abc,"))
+
+
+def test_exploitdb_download_fills_the_table(con):
+    session = FakeSession({collect.EXPLOITDB_URL: [FakeResponse(body=EDB_CSV.encode())]})
+    assert collect.update_exploitdb(con, session) == 4
+    assert con.execute("SELECT COUNT(*) FROM exploitdb").fetchone()[0] == 4
+    assert db.get_meta(con, "exploitdb_updated")

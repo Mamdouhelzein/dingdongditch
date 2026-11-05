@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import csv
 import gzip
+import io
+import re
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -20,6 +22,7 @@ from dingdongditch.db import set_meta
 
 KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 EPSS_URL = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
+EXPLOITDB_URL = "https://gitlab.com/exploit-database/exploitdb/-/raw/main/files_exploits.csv"
 
 USER_AGENT = f"dingdongditch/{__version__} (+https://github.com/Mamdouhelzein/dingdongditch)"
 TIMEOUT = 60.0
@@ -137,3 +140,46 @@ def update_epss(con: sqlite3.Connection, session: requests.Session) -> int:
         set_meta(con, "epss_date", notes.get("score_date", ""))
         set_meta(con, "epss_updated", _now())
     return len(rows)
+
+
+# A few Exploit-DB entries have typos like "CVE-2015- 5698" or a broken dash, so
+# anything that isn't a letter, digit or ';' may sit between the year and the number.
+_EDB_CVE = re.compile(r"CVE-(\d{4})[^\w;]{1,3}(\d{4,7})(?!\d)", re.IGNORECASE)
+_EDB_COLUMNS = {"id", "date_published", "type", "platform", "verified", "codes"}
+
+
+def parse_exploitdb(text: str) -> list[tuple[int, str, str, str, str, int]]:
+    """Exploit-DB's index CSV -> one row per (exploit, CVE) for the exploitdb table.
+
+    Only the index is read: the exploit code itself is never downloaded.
+    Exploits that name no CVE are skipped, because nothing could link them to a scan.
+    """
+    reader = csv.DictReader(io.StringIO(text))
+    if not _EDB_COLUMNS <= set(reader.fieldnames or ()):
+        raise DownloadError("The Exploit-DB index wasn't in the expected format: unknown columns")
+    rows = {}
+    try:
+        for item in reader:
+            for year, number in _EDB_CVE.findall(item["codes"] or ""):
+                edb_id, cve = int(item["id"]), f"CVE-{year}-{number}"
+                rows[edb_id, cve] = (
+                    edb_id,
+                    cve,
+                    item["date_published"],
+                    item["type"],
+                    item["platform"],
+                    int(item["verified"] == "1"),
+                )
+    except (ValueError, csv.Error) as exc:
+        raise DownloadError(f"The Exploit-DB index wasn't in the expected format: {exc}") from exc
+    return list(rows.values())
+
+
+def update_exploitdb(con: sqlite3.Connection, session: requests.Session) -> int:
+    """Replace the exploitdb table. Returns how many CVEs have at least one public exploit."""
+    rows = parse_exploitdb(_unzip(_get(session, EXPLOITDB_URL).content, "Exploit-DB"))
+    with con:
+        con.execute("DELETE FROM exploitdb")
+        con.executemany("INSERT INTO exploitdb VALUES (?, ?, ?, ?, ?, ?)", rows)
+        set_meta(con, "exploitdb_updated", _now())
+    return len({row[1] for row in rows})
