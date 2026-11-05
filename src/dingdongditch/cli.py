@@ -7,6 +7,7 @@ import json
 import sqlite3
 import subprocess
 import sys
+from datetime import date
 from enum import Enum
 from pathlib import Path
 
@@ -280,8 +281,18 @@ def update_db(
         False, "--full",
         help="Check every year of NVD data, not just the last week's changes.",
     ),
+    epss_dates: list[str] = typer.Option(
+        [], "--epss-date", metavar="YYYY-MM-DD",
+        help="Also save the EPSS scores from this past day. Can be given more than once.",
+    ),
 ) -> None:
     """Download or refresh the vulnerability data (NVD, CISA KEV, Exploit-DB, EPSS)."""
+    try:
+        days = [date.fromisoformat(text) for text in epss_dates]
+    except ValueError as exc:
+        raise typer.BadParameter(
+            f"{exc}. Use YYYY-MM-DD, e.g. 2025-05-01.", param_hint="--epss-date"
+        ) from exc
     path = db_path or db.default_path()
     try:
         con = db.connect(path)
@@ -297,6 +308,11 @@ def update_db(
     steps = [
         ("CISA KEV", "exploited CVEs", lambda: collect.update_kev(con, session)),
         ("EPSS", "scored CVEs", lambda: collect.update_epss(con, session)),
+        *[
+            (f"EPSS on {day}", "scored CVEs",
+             lambda day=day: collect.update_epss_history(con, session, day))
+            for day in days
+        ],
         ("Exploit-DB", "CVEs with a public exploit",
          lambda: collect.update_exploitdb(con, session)),
         ("NVD", "CVEs added or changed",

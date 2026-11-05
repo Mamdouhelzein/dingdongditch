@@ -1,5 +1,7 @@
 """`dingdongditch update-db`, with the downloaders replaced so nothing touches the internet."""
 
+from datetime import date
+
 import pytest
 from typer.testing import CliRunner
 
@@ -77,3 +79,30 @@ def test_update_db_refuses_a_file_that_is_not_a_database(tmp_path, fake_sources)
     result = CliRunner().invoke(app, ["update-db", "--db", str(path)])
     assert result.exit_code == 1
     assert "Can't open the database" in result.output
+
+
+def test_update_db_also_saves_past_epss_scores(tmp_path, fake_sources, monkeypatch):
+    asked = []
+
+    def history(con, session, day):
+        asked.append(day)
+        return 7
+
+    monkeypatch.setattr(collect, "update_epss_history", history)
+    result = CliRunner().invoke(
+        app,
+        ["update-db", "--db", str(tmp_path / "v.db"),
+         "--epss-date", "2025-05-01", "--epss-date", "2024-05-01"],
+    )
+    assert asked == [date(2025, 5, 1), date(2024, 5, 1)]
+    assert "EPSS on 2025-05-01: 7 scored CVEs" in result.output
+    assert "EPSS on 2024-05-01: 7 scored CVEs" in result.output
+
+
+def test_update_db_refuses_a_bad_date(tmp_path, fake_sources):
+    result = CliRunner().invoke(
+        app, ["update-db", "--db", str(tmp_path / "v.db"), "--epss-date", "1 May 2025"]
+    )
+    assert result.exit_code == 2
+    assert "YYYY-MM-DD" in result.output
+    assert not (tmp_path / "v.db").exists()

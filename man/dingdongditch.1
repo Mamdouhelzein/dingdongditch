@@ -15,6 +15,8 @@ dingdongditch \- find open ports on hosts you own, and work out what is behind t
 .RB [ \-\-db
 .IR file ]
 .RB [ \-\-full ]
+.RB [ \-\-epss\-date
+.IR YYYY-MM-DD ]
 .br
 .B dingdongditch
 .RB [ \-V | \-\-version ]
@@ -130,6 +132,12 @@ See
 Check every year of NVD data for changes, not just the last week's.
 Without it, a run within a week of the last one only reads NVD's list of
 recent changes.
+.TP
+.B \-\-epss\-date \fIYYYY-MM-DD\fR
+Also save the EPSS scores from this past day, so a model can be compared with
+EPSS as it was before it knew what happened next.
+Can be given more than once.
+Scores go back to April 2021.
 .SS General options
 .TP
 .BR \-V ", " \-\-version
@@ -292,7 +300,9 @@ Only the index is downloaded, never the code itself.
 .TP
 .B EPSS
 FIRST.org's daily estimate of how likely each CVE is to be exploited in the next
-30 days.
+30 days, and with
+.BR \-\-epss\-date ,
+its estimates from chosen past days.
 .PP
 The first run downloads about 260 MB, takes 10 to 15 minutes, and makes a file
 of about 750 MB.
@@ -379,6 +389,9 @@ Download the vulnerability data, or bring it up to date.
 .TP
 .B dingdongditch update\-db \-\-db ~/lab/vulns.db \-\-full
 Use another database file and check every year of NVD data.
+.TP
+.B dingdongditch update\-db \-\-epss\-date 2025\-05\-01
+Also keep the EPSS scores from 1 May 2025.
 .SH ENVIRONMENT
 .TP
 .B DINGDONGDITCH_DB
