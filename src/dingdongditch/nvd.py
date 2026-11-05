@@ -165,12 +165,12 @@ def cpe_rows(cve: dict) -> list[tuple]:
 
 
 def store(con: sqlite3.Connection, items: Iterable[dict]) -> int:
-    """Save CVE records, keeping whichever copy of each CVE is newest. Returns how many."""
+    """Save CVE records that are new or newer than the saved copy. Returns how many."""
     count = 0
     for item in items:
         cve = item["cve"]
         old = con.execute("SELECT last_modified FROM cve WHERE id = ?", (cve["id"],)).fetchone()
-        if old and old[0] > cve["lastModified"]:
+        if old and old[0] >= cve["lastModified"]:  # same date means nothing changed
             continue
         con.execute(
             "INSERT OR REPLACE INTO cve VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",

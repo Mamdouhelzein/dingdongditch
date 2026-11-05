@@ -174,6 +174,8 @@ def test_store_keeps_the_newest_copy(con):
         nvd.store(con, [{"cve": make_cve(modified="2026-02-01T00:00:00.000")}])
         older = make_cve(modified="2026-01-01T00:00:00.000", vulnStatus="Modified")
         assert nvd.store(con, [{"cve": older}]) == 0
+        same = make_cve(modified="2026-02-01T00:00:00.000")
+        assert nvd.store(con, [{"cve": same}]) == 0
     assert con.execute("SELECT status FROM cve").fetchone() == ("Analyzed",)
     newer = make_cve(modified="2026-03-01T00:00:00.000", configurations=[])
     with con:
