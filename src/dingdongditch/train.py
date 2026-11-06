@@ -9,18 +9,29 @@ the final test.
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 
+import joblib
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from xgboost import XGBClassifier
 
-from dingdongditch.evaluate import HORIZON, EvaluationError, make_test_set, measure
-from dingdongditch.features import kev_between, make_vectorizer
+from dingdongditch.evaluate import (
+    HORIZON,
+    EvaluationError,
+    cvss_scores,
+    epss_scores,
+    exploit_scores,
+    make_test_set,
+    measure,
+)
+from dingdongditch.features import kev_between, load, make_vectorizer
 
 # Logistic regression adds up clues. C: how closely it may fit the training CVEs
 # (small = simpler); class_weight="balanced" makes the few exploited CVEs count as
@@ -43,6 +54,10 @@ GRID = LOGISTIC + XGBOOST
 # The winner of choose_settings() standing on 2024-05-01, judged on the year after:
 # average precision 0.087, against 0.042 for the best logistic regression.
 BEST = {"kind": "xgboost", "max_depth": 6, "scale_pos_weight": 20}
+# The best logistic regression on the same check. A little weaker, ten times faster.
+FAST = {"kind": "logistic", "C": 0.3, "class_weight": None}
+
+MODEL_FILE = "model.joblib"  # saved next to the database
 
 
 def _classifier(settings: dict) -> LogisticRegression | XGBClassifier:
@@ -113,3 +128,49 @@ def choose_settings(
         tried.append((settings, measures))
     best = max(tried, key=lambda item: item[1]["average precision"])[0]
     return Choice(settings=best, tried=tried)
+
+
+def save(model: Pipeline, path: Path, info: dict) -> None:
+    """Save a trained model with notes on how it was made (settings, date, counts)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump({"model": model, **info}, path)
+
+
+def load_saved(path: Path) -> dict:
+    """The saved model and its notes; the model itself is under "model"."""
+    return joblib.load(path)
+
+
+@dataclass(frozen=True)
+class TestResult:
+    cutoff: date
+    judged: int  # CVEs public and not yet on CISA's list at the cutoff
+    listed: int  # how many of them CISA listed in the year after
+    rows: list[tuple[str, dict[str, float]]]  # each ranking and its measures
+    epss_missing: bool  # no EPSS scores were saved for the cutoff day
+
+
+def time_travel_test(
+    con: sqlite3.Connection, cutoff: date, settings: dict, today: date
+) -> TestResult:
+    """Train on what was known on `cutoff`, then judge every ranking on the year after."""
+    if cutoff + HORIZON > today:
+        raise EvaluationError(
+            f"The year after {cutoff.isoformat()} isn't over yet, so the test can't be "
+            f"judged. Pick a date on or before {(today - HORIZON).isoformat()}."
+        )
+    frame = load(con, cutoff)
+    test = make_test_set(frame, cutoff)
+    if not test.listed.any():
+        raise EvaluationError(
+            f"CISA listed none of the CVEs public on {cutoff.isoformat()} in the year after"
+        )
+    rankings = {"CVSS": cvss_scores(frame), "Public exploit": exploit_scores(frame)}
+    epss_missing = False
+    try:
+        rankings[f"EPSS on {cutoff.isoformat()}"] = epss_scores(con, frame, cutoff)
+    except EvaluationError:
+        epss_missing = True
+    rankings["Our model"] = scores(fit(frame, cutoff, settings), frame)
+    rows = [(name, measure(ranking[test.rows], test.listed)) for name, ranking in rankings.items()]
+    return TestResult(cutoff, len(test.rows), int(test.listed.sum()), rows, epss_missing)

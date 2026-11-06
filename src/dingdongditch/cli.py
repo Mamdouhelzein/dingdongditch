@@ -7,7 +7,8 @@ import json
 import sqlite3
 import subprocess
 import sys
-from datetime import date
+import time
+from datetime import date, timedelta
 from enum import Enum
 from pathlib import Path
 
@@ -23,12 +24,22 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from dingdongditch import __version__, collect, db, nmap_scanner, nvd, own_scanner
+from dingdongditch import (
+    __version__,
+    collect,
+    db,
+    features,
+    nmap_scanner,
+    nvd,
+    own_scanner,
+    train,
+)
 from dingdongditch.connect_scan import (
     DEFAULT_CONCURRENCY,
     DEFAULT_TIMEOUT,
     Recheck,
 )
+from dingdongditch.evaluate import EvaluationError
 from dingdongditch.nmap_parser import Service, parse_nmap_xml
 from dingdongditch.nmap_scanner import PROFILES, NmapNotFoundError
 from dingdongditch.targets import split_targets
@@ -349,6 +360,107 @@ def update_db(
             "[yellow]Some sources failed. Their old data was kept; run it again later.[/yellow]"
         )
         raise typer.Exit(1)
+
+
+def _print_test(result: train.TestResult) -> None:
+    console.print(
+        f"Standing on {result.cutoff.isoformat()}: {result.judged:,} CVEs were public and not "
+        f"yet on CISA's list. CISA listed {result.listed} of them in the following year.\n"
+        "How many of those would you have caught by fixing the top of each ranking:"
+    )
+    table = Table()
+    for heading in ("Ranking", "Top 1%", "Top 5%", "Top 10%", "Average precision"):
+        table.add_column(heading, justify="left" if heading == "Ranking" else "right")
+    for name, measures in result.rows:
+        table.add_row(
+            name,
+            *(f"{measures[key]:.1%}" for key in ("top 1%", "top 5%", "top 10%")),
+            f"{measures['average precision']:.4f}",
+        )
+    console.print(table)
+    console.print(
+        f"Random guessing catches about 1%, 5% and 10%, with an average precision of "
+        f"{result.listed / result.judged:.4f}."
+    )
+    if result.epss_missing:
+        day = result.cutoff.isoformat()
+        err.print(
+            f"[yellow]No EPSS scores saved for {day}, so EPSS isn't compared. Run "
+            f"`dingdongditch update-db --epss-date {day}` to add them.[/yellow]"
+        )
+
+
+@app.command("train")
+def train_command(
+    db_path: Path = typer.Option(
+        None, "--db",
+        help=f"Database file. Default: ${db.ENV_VAR} if set, else a per-user data folder.",
+    ),
+    model_path: Path = typer.Option(
+        None, "--model", help=f"Where to save the model. Default: {train.MODEL_FILE} next to "
+        "the database.",
+    ),
+    fast: bool = typer.Option(
+        False, "--fast",
+        help="Use logistic regression: a few minutes instead of about 15, a little less sharp.",
+    ),
+    test_date: str = typer.Option(
+        None, "--test", metavar="YYYY-MM-DD",
+        help="Don't save a model: train on what was known that day, and compare it with "
+        "CVSS and EPSS on the year after.",
+    ),
+) -> None:
+    """Train the model that ranks CVEs by how likely they are to be exploited."""
+    try:
+        cutoff = date.fromisoformat(test_date) if test_date else None
+    except ValueError as exc:
+        raise typer.BadParameter(
+            f"{exc}. Use YYYY-MM-DD, e.g. 2025-05-01.", param_hint="--test"
+        ) from exc
+    path = db_path or db.default_path()
+    if not path.exists():
+        err.print(f"[red]No database at {path}.[/red] Run `dingdongditch update-db` first.")
+        raise typer.Exit(1)
+    try:
+        con = db.connect(path)
+    except db.DatabaseError as exc:
+        err.print(f"[red]Can't open the database:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    settings = train.FAST if fast else train.BEST
+    started = time.monotonic()
+    try:
+        if not con.execute("SELECT 1 FROM cve LIMIT 1").fetchone():
+            err.print("[red]The database has no CVEs yet.[/red] Run `dingdongditch update-db`.")
+            raise typer.Exit(1)
+        if cutoff:
+            with err.status(f"Training on what was known on {cutoff.isoformat()}..."):
+                result = train.time_travel_test(con, cutoff, settings, date.today())
+            _print_test(result)
+            return
+        # Everything known today: CVEs published up to now, every KEV entry so far.
+        today = date.today() + timedelta(days=1)
+        with err.status("Training on every CVE known today..."):
+            frame = features.load(con, today)
+            model = train.fit(frame, today, settings)
+        exploited = int(features.kev_between(frame, None, today).sum())
+        out = model_path or path.with_name(train.MODEL_FILE)
+        train.save(
+            model, out,
+            {"settings": settings, "trained": collect.utc_now(), "cves": len(frame),
+             "exploited": exploited, "version": __version__},
+        )
+    except EvaluationError as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    finally:
+        con.close()
+    minutes = (time.monotonic() - started) / 60
+    console.print(
+        f"Trained a {settings['kind']} model on {len(frame):,} CVEs, {exploited:,} of them "
+        f"exploited, in {minutes:.0f} min."
+    )
+    console.print(f"Saved to {escape(str(out))}", soft_wrap=True)
 
 
 if __name__ == "__main__":

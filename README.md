@@ -113,6 +113,19 @@ Later runs only fetch what changed. If one source fails to download, it keeps it
 
 `--epss-date` keeps EPSS scores from a past day (back to April 2021). Today's EPSS already knows which CVEs got exploited since then, so a fair test of the model compares it with EPSS from before.
 
+## Risk model
+
+`train` teaches a model which CVEs attackers really use, with CISA's list of exploited CVEs as the examples. It looks at the CVSS details, weakness type, vendor and product, description words, public exploits and age.
+
+```bash
+dingdongditch train                                 # about 15 minutes, saves model.joblib next to the database
+dingdongditch train --fast                          # logistic regression: a few minutes, a little less sharp
+dingdongditch train --model ~/lab/model.joblib      # save it somewhere else
+dingdongditch train --test 2025-05-01               # how it would have done from that day
+```
+
+`--test` is a fair time-travel test: it trains on only what was known that day, then checks how many of the CVEs CISA listed in the following year the model, CVSS and EPSS (as it was that day) would each have caught by fixing the top of their rankings. It saves nothing.
+
 ## Karen mode
 
 `--karen-mode` demands to speak to every port's manager.
@@ -203,7 +216,10 @@ src/dingdongditch/
   db.py            # the local vulnerability database (SQLite)
   collect.py       # downloads CISA KEV, EPSS and the Exploit-DB index
   nvd.py           # downloads NVD's CVE feeds, one CVE at a time
-  features.py, train.py, matcher.py, scorer.py  # not built yet
+  features.py      # CVEs as they were on a date → numbers for the model
+  train.py         # trains, saves and time-travel-tests the model
+  evaluate.py      # top 1% / 5% / 10% and the CVSS and EPSS baselines
+  matcher.py, scorer.py  # not built yet
   data/            # PostgreSQL error line -> release table
 man/               # the man page
 scripts/           # rebuilds the PostgreSQL table from its source
