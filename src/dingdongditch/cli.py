@@ -362,6 +362,9 @@ def update_db(
         raise typer.Exit(1)
 
 
+_MODEL_NAMES = {"logistic": "a logistic regression", "xgboost": "an XGBoost"}
+
+
 def _print_test(result: train.TestResult) -> None:
     console.print(
         f"Standing on {result.cutoff.isoformat()}: {result.judged:,} CVEs were public and not "
@@ -457,7 +460,8 @@ def train_command(
         con.close()
     minutes = (time.monotonic() - started) / 60
     console.print(
-        f"Trained a {settings['kind']} model on {len(frame):,} CVEs, {exploited:,} of them "
+        f"Trained {_MODEL_NAMES[settings['kind']]} model on {len(frame):,} CVEs, "
+        f"{exploited:,} of them "
         f"exploited, in {minutes:.0f} min."
     )
     console.print(f"Saved to {escape(str(out))}", soft_wrap=True)

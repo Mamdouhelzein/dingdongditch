@@ -31,7 +31,7 @@ def run(*args):
 def test_train_saves_a_model_next_to_the_database(database):
     result = run("--db", str(database), "--fast")
     assert result.exit_code == 0, result.output
-    assert "Trained a logistic model on 400 CVEs" in result.output
+    assert "Trained a logistic regression model on 400 CVEs" in result.output
     saved = train.load_saved(database.with_name(train.MODEL_FILE))
     assert saved["settings"] == train.FAST
     assert saved["cves"] == 400
@@ -43,6 +43,7 @@ def test_default_model_is_xgboost_and_can_go_elsewhere(database, tmp_path):
     out = tmp_path / "models" / "mine.joblib"
     result = run("--db", str(database), "--model", str(out))
     assert result.exit_code == 0, result.output
+    assert "Trained an XGBoost model" in result.output
     assert train.load_saved(out)["settings"] == train.BEST
     assert not database.with_name(train.MODEL_FILE).exists()
 
