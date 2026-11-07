@@ -54,30 +54,27 @@ _CWE_NAMES = {
     "CWE-843": "type confusion",
     "CWE-918": "server-side request forgery",
 }
-_CVSS_PARTS = {
+_CVSS_PARTS = {  # in v3 terms: features.py translates v2 vectors
     "AV": {"N": "reachable over the network", "A": "reachable from the same network"},
     "AC": {"L": "easy to pull off"},
     "PR": {"N": "no login needed"},
-    "Au": {"N": "no login needed"},
     "UI": {"N": "no user action needed"},
     "S": {"C": "can reach beyond the service"},
-    "C": {"H": "can expose all data", "C": "can expose all data"},
-    "I": {"H": "can change any data", "C": "can change any data"},
-    "A": {"H": "can take the service down", "C": "can take the service down"},
+    "C": {"H": "can expose all data"},
+    "I": {"H": "can change any data"},
+    "A": {"H": "can take the service down"},
 }
 # Number features are centred on the average CVE, so only an above-average value
 # is described; "less than average" is not a reason worth printing.
 _NUMBERS = {
-    "cvss3_score": "high CVSS score",
-    "cvss2_score": "high CVSS v2 score",
+    "cvss_score": "high CVSS score",
     "log_exploits": "public exploit on Exploit-DB",
     "exploit_verified": "verified exploit on Exploit-DB",
     "exploit_remote": "remote exploit on Exploit-DB",
     "exploit_webapps": "web exploit on Exploit-DB",
     "exploit_local": "local exploit on Exploit-DB",
     "log_age_days": "public for a long time",
-    "no_cvss3": "no CVSS v3 score yet",
-    "no_cvss2": "no CVSS v2 score",
+    "no_cvss": "no CVSS score yet",
 }
 
 
@@ -105,7 +102,7 @@ def describe(name: str, value: float) -> str | None:
         return _NUMBERS.get(item) if value > 0 else None
     if value <= 0:
         return None
-    if group in ("cvss3", "cvss2"):
+    if group == "cvss":
         key, _, level = item.partition("=")
         return _CVSS_PARTS.get(key, {}).get(level)
     if group == "cwe":

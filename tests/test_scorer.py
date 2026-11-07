@@ -98,10 +98,9 @@ def test_open_explains_what_is_missing(tmp_path):
 @pytest.mark.parametrize(
     "name, value, words",
     [
-        ("cvss3__PR=N", 1, "no login needed"),
-        ("cvss2__Au=N", 1, "no login needed"),
-        ("cvss3__AV=N", 1, "reachable over the network"),
-        ("cvss3__AV=P", 1, None),  # physical access is not a reason to worry more
+        ("cvss__PR=N", 1, "no login needed"),
+        ("cvss__AV=N", 1, "reachable over the network"),
+        ("cvss__AV=P", 1, None),  # physical access is not a reason to worry more
         ("cwe__CWE-78", 1, "OS command injection (CWE-78)"),
         ("cwe__CWE-1321", 1, "weakness CWE-1321"),
         ("product__ivanti", 1, "affects ivanti products"),

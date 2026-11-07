@@ -5,6 +5,11 @@ exploits Exploit-DB had published before it. The CISA KEV date is kept in its ow
 column, so the caller decides which CVEs count as exploited: listed before the
 cutoff for training, listed after it for testing.
 
+CVSS is one set of features for every CVE: v3 where NVD has it, otherwise v2
+translated into v3's terms. NVD only began v3 scores in 2016, so treating "no v3
+score" as a clue taught the model that old CVEs are safe, and old servers are
+full of old CVEs.
+
 NVD has no history, so CVSS, CWE, description and products are today's copies.
 They change little once a CVE is analysed. References are left out on purpose:
 news stories and "Exploit" links pile up after a CVE is attacked, so they would
@@ -27,7 +32,7 @@ from sklearn.preprocessing import FunctionTransformer, StandardScaler
 
 NUMBER_INPUTS = [
     "cvss3_score",
-    "cvss2_score",
+    "cvss2_score",  # used when there is no v3 score
     "exploits",
     "exploit_verified",
     "exploit_remote",
@@ -36,10 +41,8 @@ NUMBER_INPUTS = [
     "age_days",
 ]
 NUMBER_NAMES = [
-    "cvss3_score",
-    "no_cvss3",
-    "cvss2_score",
-    "no_cvss2",
+    "cvss_score",
+    "no_cvss",
     "log_exploits",
     "exploit_verified",
     "exploit_remote",
@@ -114,12 +117,11 @@ def kev_between(frame: pd.DataFrame, start: date | None, end: date | None) -> np
 
 
 def _numbers(frame: pd.DataFrame) -> np.ndarray:
+    score = frame["cvss3_score"].fillna(frame["cvss2_score"])
     return np.column_stack(
         [
-            frame["cvss3_score"].fillna(0),
-            frame["cvss3_score"].isna(),
-            frame["cvss2_score"].fillna(0),
-            frame["cvss2_score"].isna(),
+            score.fillna(0),
+            score.isna(),
             np.log1p(frame["exploits"]),
             frame["exploit_verified"],
             frame["exploit_remote"],
@@ -134,17 +136,41 @@ def _number_names(transformer, input_features) -> list[str]:
     return NUMBER_NAMES
 
 
-def _cvss_parts(vectors: pd.Series) -> list[dict[str, str]]:
-    """'CVSS:3.1/AV:N/AC:L/...' -> {'AV': 'N', 'AC': 'L', ...} for each CVE."""
+# CVSS v2 parts in v3's terms. v2 has no user interaction or scope, so those stay unknown.
+_V2_TO_V3 = {
+    "AV": ("AV", {"N": "N", "A": "A", "L": "L"}),
+    "AC": ("AC", {"L": "L", "M": "H", "H": "H"}),
+    "Au": ("PR", {"N": "N", "S": "L", "M": "H"}),  # logins needed -> privileges needed
+    "C": ("C", {"N": "N", "P": "L", "C": "H"}),
+    "I": ("I", {"N": "N", "P": "L", "C": "H"}),
+    "A": ("A", {"N": "N", "P": "L", "C": "H"}),
+}
+
+
+def _parse(vector: str) -> dict[str, str]:
+    """'CVSS:3.1/AV:N/AC:L/...' -> {'AV': 'N', 'AC': 'L', ...}"""
+    found = {}
+    for item in vector.split("/"):
+        key, sep, value = item.partition(":")
+        if sep and key != "CVSS":
+            found[key] = value
+    return found
+
+
+def _cvss_parts(frame: pd.DataFrame) -> list[dict[str, str]]:
+    """Each CVE's CVSS parts in v3 terms: its v3 vector, or its v2 vector translated."""
     parts = []
-    for vector in vectors:
-        found = {}
-        if isinstance(vector, str):
-            for item in vector.split("/"):
-                key, sep, value = item.partition(":")
-                if sep and key != "CVSS":
-                    found[key] = value
-        parts.append(found)
+    for v3, v2 in zip(frame["cvss3_vector"], frame["cvss2_vector"], strict=True):
+        if isinstance(v3, str):
+            parts.append(_parse(v3))
+        elif isinstance(v2, str):
+            parts.append({
+                _V2_TO_V3[key][0]: _V2_TO_V3[key][1][value]
+                for key, value in _parse(v2).items()
+                if key in _V2_TO_V3 and value in _V2_TO_V3[key][1]
+            })
+        else:
+            parts.append({})
     return parts
 
 
@@ -166,20 +192,12 @@ def make_vectorizer(min_count: int = 5) -> ColumnTransformer:
                 NUMBER_INPUTS,
             ),
             (
-                "cvss3",
+                "cvss",
                 make_pipeline(
                     FunctionTransformer(_cvss_parts, feature_names_out="one-to-one"),
                     DictVectorizer(),
                 ),
-                "cvss3_vector",
-            ),
-            (
-                "cvss2",
-                make_pipeline(
-                    FunctionTransformer(_cvss_parts, feature_names_out="one-to-one"),
-                    DictVectorizer(),
-                ),
-                "cvss2_vector",
+                ["cvss3_vector", "cvss2_vector"],
             ),
             ("cwe", CountVectorizer(min_df=min_count, **tokens), "cwes"),
             ("product", CountVectorizer(min_df=min_count, **tokens), "products"),

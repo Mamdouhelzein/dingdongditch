@@ -57,6 +57,9 @@ GRID = LOGISTIC + XGBOOST
 # against 0.057), logistic regression ahead from 2023-05-01 (0.020 against 0.014).
 # On a tie the simpler model wins: it trains ten times faster, and each clue's
 # weight can be read straight off it to explain a score.
+# After CVSS became one v3-or-v2 set of features, the same check picked C=0.3 again,
+# and logistic regression scored 0.060 (2025) and 0.022 (2023). XGBoost's figures
+# above are from before that change.
 DEFAULT = {"kind": "logistic", "C": 0.3, "class_weight": None}
 XGBOOST_BEST = {"kind": "xgboost", "max_depth": 6, "scale_pos_weight": 20}
 

@@ -194,7 +194,7 @@ These are the results of `dingdongditch train --test`. "Top 1%" means: of the CV
 | CVSS | 1.6% | 14.6% | 31.1% | 0.0008 |
 | Has a public exploit | 2.0% | 10.0% | 18.7% | 0.0004 |
 | EPSS as it was that day | 27.5% | 52.7% | 58.2% | 0.0332 |
-| **DingDongDitch** | **31.9%** | **54.9%** | **73.6%** | **0.0574** |
+| **DingDongDitch** | **31.9%** | **54.9%** | **73.6%** | **0.0597** |
 
 **From 1 May 2023:** 200,343 CVEs ranked, 53 of them listed by CISA in the next year.
 
@@ -203,7 +203,7 @@ These are the results of `dingdongditch train --test`. "Top 1%" means: of the CV
 | CVSS | 0.0% | 9.9% | 33.4% | 0.0007 |
 | Has a public exploit | 2.5% | 12.6% | 25.3% | 0.0004 |
 | EPSS as it was that day | 24.5% | 32.1% | 37.7% | 0.0122 |
-| **DingDongDitch** | **35.8%** | **54.7%** | **75.5%** | **0.0204** |
+| **DingDongDitch** | **34.0%** | **54.7%** | **77.4%** | **0.0218** |
 
 In both years the model beats EPSS and leaves CVSS far behind. Sorting by CVSS barely beats random at the very top, because thousands of CVEs score 9.8 and most are never attacked.
 
@@ -215,12 +215,14 @@ What it learned makes sense. Products from Cisco, Ivanti, Microsoft, SonicWall a
 - NVD references are left out. Links to news stories and exploits pile up *after* an attack, so they would leak the answer.
 - The model's settings were chosen on a different year (May 2024 to May 2025, from standing on 1 May 2024), not on either test year.
 - Being open about one choice: XGBoost and logistic regression tied across the two test years (XGBoost was a little better from 2025, logistic regression from 2023), and logistic regression became the default after seeing that. It's ten times faster, and each clue's weight can be read straight off it. `train --xgboost` gives the other one.
+- CVSS is one set of clues for every CVE: the v3 score and vector where NVD has them, otherwise v2 translated into v3's terms. NVD only began v3 in 2016, and an earlier version that treated "no v3 score" as a clue learned that old CVEs are safe. The numbers above are from the current version.
 
 **What to keep in mind**
 
 - The test sets are small: 91 and 53 CVEs. One or two lucky catches move the top-1% number by a few points.
 - CISA's list only holds exploitation CISA has confirmed, so some CVEs counted as "not exploited" really were. This makes every ranking look a little worse, the same for all of them.
 - NVD keeps no history, so CVSS, descriptions and products are today's copies. They rarely change once a CVE is analysed. In the 2025 test, 10 of the 91 listed CVEs say "exploited in the wild" in their description. All 10 were published before the day, 8 of them in 2008–2013, when NVD descriptions routinely said so. Without them, the model still ties EPSS in the top 1% and 5% and beats it in the top 10% (70.4% against 55.6%).
+- CISA's list rarely includes old CVEs. Of the CVEs from before 2012 that have a public remote exploit, 0.7% are on it, against 16.5% for CVEs since 2018. The model learns that, so it ranks an old CVE low even when it is dangerous on a server that never got patched.
 - No model can rank a CVE before it is public. In the year after 1 May 2025, CISA listed 259 CVEs, and 168 of them were brand new (mostly zero-days). Those aren't in the test.
 
 ## Roadmap

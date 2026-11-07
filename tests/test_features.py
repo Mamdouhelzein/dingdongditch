@@ -4,6 +4,7 @@ import pickle
 from datetime import date
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from dingdongditch import db, features
@@ -78,11 +79,27 @@ def test_kev_between_splits_before_and_after(con):
     assert list(features.kev_between(frame, CUTOFF, date(2025, 7, 1))) == [False, False, False]
 
 
-def test_cvss_vectors_become_parts():
-    parts = features._cvss_parts([V3, V2, None])
+def test_cvss_vectors_become_parts_in_v3_terms():
+    frame = pd.DataFrame(
+        {"cvss3_vector": [V3, None, None, V3], "cvss2_vector": [None, V2, None, V2]}
+    )
+    parts = features._cvss_parts(frame)
     assert parts[0]["AV"] == "N" and "CVSS" not in parts[0]
-    assert parts[1] == {"AV": "L", "AC": "H", "Au": "N", "C": "P", "I": "N", "A": "N"}
+    # v2 translated: one login (Au:S) would be PR:L, none is PR:N; partial is low.
+    assert parts[1] == {"AV": "L", "AC": "H", "PR": "N", "C": "L", "I": "N", "A": "N"}
     assert parts[2] == {}
+    assert parts[3] == parts[0]  # v3 wins when there are both
+
+
+def test_old_and_new_cves_share_one_cvss_score():
+    frame = pd.DataFrame({
+        "cvss3_score": [9.8, None, None], "cvss2_score": [7.5, 10.0, None],
+        "exploits": 0, "exploit_verified": 0, "exploit_remote": 0, "exploit_webapps": 0,
+        "exploit_local": 0, "age_days": 1,
+    })
+    numbers = dict(zip(features.NUMBER_NAMES, features._numbers(frame).T, strict=True))
+    assert list(numbers["cvss_score"]) == [9.8, 10.0, 0.0]
+    assert list(numbers["no_cvss"]) == [0.0, 0.0, 1.0]
 
 
 def test_vectorizer_names_every_column(con):
@@ -93,16 +110,17 @@ def test_vectorizer_names_every_column(con):
     assert matrix.shape == (3, len(names))
     for name in [
         "number__log_exploits",
-        "number__no_cvss3",
-        "cvss3__AV=N",
-        "cvss2__Au=N",
+        "number__no_cvss",
+        "cvss__AV=N",
+        "cvss__AV=L",  # from CVE-B's v2 vector
+        "cvss__PR=N",
         "cwe__CWE-78",
         "product__linux:linux_kernel",
         "text__remote code",
     ]:
         assert name in names, name
     row = dict(zip(names, matrix.toarray()[0], strict=True))
-    assert row["cvss3__AV=N"] == 1
+    assert row["cvss__AV=N"] == 1
     assert row["cwe__CWE-200"] == 0
     assert row["product__vsftpd_project"] == 1
 
