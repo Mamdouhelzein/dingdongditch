@@ -9,7 +9,7 @@
 
 A port scanner written from scratch in Python. It finds open TCP ports, works out which service and version is behind each one, and proves common misconfigurations without exploiting anything.
 
-**Status:** the scanner works, and `update-db` downloads the vulnerability data. The machine learning part, which will predict which CVEs are most likely to be exploited, isn't built yet, so the Risk column only shows confirmed problems for now.
+**Status:** the scanner works, `update-db` downloads the vulnerability data, and `train` builds a model that predicts which CVEs attackers will use next better than CVSS and EPSS did ([results](#how-good-is-the-model)). Scans don't link services to CVEs yet, so the Risk column only shows confirmed problems for now.
 
 ## What it looks like
 
@@ -169,7 +169,6 @@ Tested against a real Metasploitable 2:
 
 - A default scan found 24 open ports, and nmap's default top 1000 ports found 23. The two tools use different port lists.
 - A full Karen mode scan from Kali found 30 open ports.
-
 - Like nmap, it names BIND 9.4.2 and PostgreSQL 8.3 (one of 8.3.0 to 8.3.7) in every scan, and Samba 3.0.20 and UnrealIRCd 3.2.8.1 in Karen mode.
 
 nmap still knows far more services, with thousands of probes. java-rmi, for example, is only named from its port number here.
@@ -182,12 +181,54 @@ Other limits:
 - SMB versions need SMB1, which newer Windows and Samba turn off.
 - Versions are what a service says about itself, and Linux distributions often patch old versions without changing the number.
 
+## How good is the model?
+
+The question: out of every CVE that is public today and not yet known to be exploited, which ones will attackers use next? The test goes back to a past day, ranks every such CVE using only what was known then, and checks which CVEs CISA added to its exploited list in the following year. A good ranking puts them near the top, so fixing its first few percent catches most of them.
+
+These are the results of `dingdongditch train --test`. "Top 1%" means: of the CVEs CISA listed that year, the share you'd have caught by fixing the top 1% of the ranking. Random guessing catches about 1%, 5% and 10%.
+
+**From 1 May 2025:** 275,380 CVEs ranked, 91 of them listed by CISA in the next year.
+
+| Ranking | Top 1% | Top 5% | Top 10% | Average precision |
+|---|---|---|---|---|
+| CVSS | 1.6% | 14.6% | 31.1% | 0.0008 |
+| Has a public exploit | 2.0% | 10.0% | 18.7% | 0.0004 |
+| EPSS as it was that day | 27.5% | 52.7% | 58.2% | 0.0332 |
+| **DingDongDitch** | **31.9%** | **54.9%** | **73.6%** | **0.0574** |
+
+**From 1 May 2023:** 200,343 CVEs ranked, 53 of them listed by CISA in the next year.
+
+| Ranking | Top 1% | Top 5% | Top 10% | Average precision |
+|---|---|---|---|---|
+| CVSS | 0.0% | 9.9% | 33.4% | 0.0007 |
+| Has a public exploit | 2.5% | 12.6% | 25.3% | 0.0004 |
+| EPSS as it was that day | 24.5% | 32.1% | 37.7% | 0.0122 |
+| **DingDongDitch** | **35.8%** | **54.7%** | **75.5%** | **0.0204** |
+
+In both years the model beats EPSS and leaves CVSS far behind. Sorting by CVSS barely beats random at the very top, because thousands of CVEs score 9.8 and most are never attacked.
+
+What it learned makes sense. Products from Cisco, Ivanti, Microsoft, SonicWall and Citrix raise a score, and so do vendor notes like "exploited in the wild" or "Apple is aware of a report". CVEs NVD hasn't scored yet, and bug types like null-pointer crashes, lower it.
+
+**How it was kept fair**
+
+- Everything comes from before the day: the CVEs public by then, CISA's list as it stood, and Exploit-DB exploits published by then. EPSS is the score it gave that day, because today's EPSS already knows what happened next. Using it would roughly double EPSS's numbers.
+- NVD references are left out. Links to news stories and exploits pile up *after* an attack, so they would leak the answer.
+- The model's settings were chosen on a different year (May 2024 to May 2025, from standing on 1 May 2024), not on either test year.
+- Being open about one choice: XGBoost and logistic regression tied across the two test years (XGBoost was a little better from 2025, logistic regression from 2023), and logistic regression became the default after seeing that. It's ten times faster, and each clue's weight can be read straight off it. `train --xgboost` gives the other one.
+
+**What to keep in mind**
+
+- The test sets are small: 91 and 53 CVEs. One or two lucky catches move the top-1% number by a few points.
+- CISA's list only holds exploitation CISA has confirmed, so some CVEs counted as "not exploited" really were. This makes every ranking look a little worse, the same for all of them.
+- NVD keeps no history, so CVSS, descriptions and products are today's copies. They rarely change once a CVE is analysed. In the 2025 test, 10 of the 91 listed CVEs say "exploited in the wild" in their description. All 10 were published before the day, 8 of them in 2008–2013, when NVD descriptions routinely said so. Without them, the model still ties EPSS in the top 1% and 5% and beats it in the top 10% (70.4% against 55.6%).
+- No model can rank a CVE before it is public. In the year after 1 May 2025, CISA listed 259 CVEs, and 168 of them were brand new (mostly zero-days). Those aren't in the test.
+
 ## Roadmap
 
 - [x] **Part 1:** built-in scanner, Karen mode and safe checks
 - [ ] Finish lab testing on Vulhub
 - [x] **Part 2:** collect data from NVD, CISA KEV, Exploit-DB and EPSS (`dingdongditch update-db`)
-- [ ] **Part 3:** train a model on which CVEs really got exploited, and compare it with CVSS and EPSS
+- [x] **Part 3:** train a model on which CVEs really got exploited, and compare it with CVSS and EPSS (`dingdongditch train`)
 - [ ] **Part 4:** match services to CVEs and show a risk score per port, with why and how to fix it
 - [ ] **Part 5:** demo GIF and PyPI release
 
