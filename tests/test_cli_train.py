@@ -29,27 +29,27 @@ def run(*args):
 
 
 def test_train_saves_a_model_next_to_the_database(database):
-    result = run("--db", str(database), "--fast")
+    result = run("--db", str(database))
     assert result.exit_code == 0, result.output
     assert "Trained a logistic regression model on 400 CVEs" in result.output
     saved = train.load_saved(database.with_name(train.MODEL_FILE))
-    assert saved["settings"] == train.FAST
+    assert saved["settings"] == train.DEFAULT
     assert saved["cves"] == 400
     assert saved["exploited"] > 0
     assert len(train.scores(saved["model"], make_frame())) == 400
 
 
-def test_default_model_is_xgboost_and_can_go_elsewhere(database, tmp_path):
+def test_xgboost_model_can_go_elsewhere(database, tmp_path):
     out = tmp_path / "models" / "mine.joblib"
-    result = run("--db", str(database), "--model", str(out))
+    result = run("--db", str(database), "--xgboost", "--model", str(out))
     assert result.exit_code == 0, result.output
     assert "Trained an XGBoost model" in result.output
-    assert train.load_saved(out)["settings"] == train.BEST
+    assert train.load_saved(out)["settings"] == train.XGBOOST_BEST
     assert not database.with_name(train.MODEL_FILE).exists()
 
 
 def test_time_travel_test_prints_the_comparison(database):
-    result = run("--db", str(database), "--fast", "--test", "2025-05-01")
+    result = run("--db", str(database), "--test", "2025-05-01")
     assert result.exit_code == 0, result.output
     assert "Standing on 2025-05-01" in result.output
     for name in ("CVSS", "Public exploit", "Our model"):
@@ -59,7 +59,7 @@ def test_time_travel_test_prints_the_comparison(database):
 
 
 def test_test_year_must_be_over(database):
-    result = run("--db", str(database), "--fast", "--test", "2026-10-01")
+    result = run("--db", str(database), "--test", "2026-10-01")
     assert result.exit_code == 1
     assert "isn't over yet" in result.output
 

@@ -91,7 +91,7 @@ def test_trained_model_can_be_saved_and_reused():
     assert np.allclose(train.scores(model, frame), train.scores(again, frame))
 
 
-@pytest.mark.parametrize("settings", [train.LOGISTIC[0], train.XGBOOST[0], train.BEST])
+@pytest.mark.parametrize("settings", [train.DEFAULT, train.XGBOOST[0], train.XGBOOST_BEST])
 def test_every_kind_of_model_learns_the_giveaway_word(settings):
     frame = make_frame()
     model = train.fit(frame, CUTOFF, settings, min_count=1)
@@ -100,8 +100,9 @@ def test_every_kind_of_model_learns_the_giveaway_word(settings):
     assert measures["top 10%"] == 1.0
 
 
-def test_best_is_one_of_the_grid():
-    assert train.BEST in train.GRID
+def test_chosen_settings_are_in_the_grid():
+    assert train.DEFAULT in train.GRID
+    assert train.XGBOOST_BEST in train.GRID
 
 
 def test_unknown_kind_is_refused():

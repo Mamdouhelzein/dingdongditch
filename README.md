@@ -118,8 +118,8 @@ Later runs only fetch what changed. If one source fails to download, it keeps it
 `train` teaches a model which CVEs attackers really use, with CISA's list of exploited CVEs as the examples. It looks at the CVSS details, weakness type, vendor and product, description words, public exploits and age.
 
 ```bash
-dingdongditch train                                 # about 15 minutes, saves model.joblib next to the database
-dingdongditch train --fast                          # logistic regression: a few minutes, a little less sharp
+dingdongditch train                                 # about 2 minutes, saves model.joblib next to the database
+dingdongditch train --xgboost                       # XGBoost instead: about 15 minutes, about as good
 dingdongditch train --model ~/lab/model.joblib      # save it somewhere else
 dingdongditch train --test 2025-05-01               # how it would have done from that day
 ```

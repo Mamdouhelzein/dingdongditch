@@ -403,9 +403,10 @@ def train_command(
         None, "--model", help=f"Where to save the model. Default: {train.MODEL_FILE} next to "
         "the database.",
     ),
-    fast: bool = typer.Option(
-        False, "--fast",
-        help="Use logistic regression: a few minutes instead of about 15, a little less sharp.",
+    use_xgboost: bool = typer.Option(
+        False, "--xgboost",
+        help="Use XGBoost instead of logistic regression: about 15 minutes instead of 2, "
+        "and about as good.",
     ),
     test_date: str = typer.Option(
         None, "--test", metavar="YYYY-MM-DD",
@@ -430,7 +431,7 @@ def train_command(
         err.print(f"[red]Can't open the database:[/red] {exc}")
         raise typer.Exit(1) from exc
 
-    settings = train.FAST if fast else train.BEST
+    settings = train.XGBOOST_BEST if use_xgboost else train.DEFAULT
     started = time.monotonic()
     try:
         if not con.execute("SELECT 1 FROM cve LIMIT 1").fetchone():

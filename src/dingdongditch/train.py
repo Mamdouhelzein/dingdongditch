@@ -51,11 +51,14 @@ XGBOOST = [
 ]
 GRID = LOGISTIC + XGBOOST
 
-# The winner of choose_settings() standing on 2024-05-01, judged on the year after:
-# average precision 0.087, against 0.042 for the best logistic regression.
-BEST = {"kind": "xgboost", "max_depth": 6, "scale_pos_weight": 20}
-# The best logistic regression on the same check. A little weaker, ten times faster.
-FAST = {"kind": "logistic", "C": 0.3, "class_weight": None}
+# The best of each kind in choose_settings() standing on 2024-05-01, judged on the
+# year after. XGBoost won that check (average precision 0.087 against 0.042), but on
+# the two years it wasn't chosen on they tied: XGBoost ahead from 2025-05-01 (0.063
+# against 0.057), logistic regression ahead from 2023-05-01 (0.020 against 0.014).
+# On a tie the simpler model wins: it trains ten times faster, and each clue's
+# weight can be read straight off it to explain a score.
+DEFAULT = {"kind": "logistic", "C": 0.3, "class_weight": None}
+XGBOOST_BEST = {"kind": "xgboost", "max_depth": 6, "scale_pos_weight": 20}
 
 MODEL_FILE = "model.joblib"  # saved next to the database
 

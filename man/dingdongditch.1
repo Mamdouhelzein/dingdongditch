@@ -23,7 +23,7 @@ dingdongditch \- find open ports on hosts you own, and work out what is behind t
 .IR file ]
 .RB [ \-\-model
 .IR file ]
-.RB [ \-\-fast ]
+.RB [ \-\-xgboost ]
 .RB [ \-\-test
 .IR YYYY-MM-DD ]
 .br
@@ -163,9 +163,10 @@ Save the model here instead of
 .I model.joblib
 next to the database.
 .TP
-.B \-\-fast
-Use logistic regression instead of XGBoost: a few minutes instead of about 15,
-and a little less sharp.
+.B \-\-xgboost
+Use XGBoost instead of logistic regression.
+It takes about 15 minutes instead of 2, and was about as good in the tests: a
+little better from May 2025, a little worse from May 2023.
 .TP
 .B \-\-test \fIYYYY-MM-DD\fR
 Save nothing.
@@ -379,6 +380,9 @@ the report shows how many of the CVEs CISA listed in the following year each
 would have caught by fixing the top 1%, 5% or 10% of its ranking.
 .PP
 The settings in use were chosen the same way, on the year before May 2025.
+Logistic regression is the default because it tied with XGBoost on the years
+it wasn't chosen on, trains ten times faster, and shows plainly which clues
+raised a score.
 .SH LIMITATIONS
 .IP \(bu 2
 TCP only, so UDP services such as SNMP are not seen.
@@ -448,8 +452,8 @@ Also keep the EPSS scores from 1 May 2025.
 .B dingdongditch train
 Train the model on everything known today and save it.
 .TP
-.B dingdongditch train \-\-test 2025\-05\-01 \-\-fast
-See how a quickly trained model would have done from 1 May 2025.
+.B dingdongditch train \-\-test 2025\-05\-01
+See how the model would have done from 1 May 2025.
 .SH ENVIRONMENT
 .TP
 .B DINGDONGDITCH_DB
