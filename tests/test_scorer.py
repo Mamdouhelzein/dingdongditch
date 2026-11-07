@@ -41,6 +41,9 @@ def world():
     )
     con.executemany("INSERT INTO kev VALUES (?, 'v', 'p', 'n', ?, 'Unknown')", kev)
     con.execute("INSERT INTO epss VALUES ('CVE-045', 0.42, 0.99)")
+    # A boring CVE with an old public remote exploit, and one with only a local exploit.
+    con.execute("INSERT INTO exploitdb VALUES (1, 'CVE-002', '2010-01-01', 'remote', 'unix', 1)")
+    con.execute("INSERT INTO exploitdb VALUES (2, 'CVE-003', '2010-01-01', 'local', 'unix', 1)")
     today = date.today() + timedelta(days=1)
     frame = features.load(con, today)
     model = train.fit(frame, today, train.DEFAULT, min_count=1)
@@ -64,6 +67,7 @@ def test_scores_levels_reasons_and_order(world):
     # A fifth of this small world is risky, so "top 1%" is too narrow to test here.
     assert risky.riskier_than >= 0.75 > boring.riskier_than
     assert boring.level == "LOW"
+    assert boring.rule is None and risky.rule is None
     assert (risky.certain, risky.fixed_in, risky.epss, risky.cvss) == (False, "2.0", 0.42, 9.8)
     assert risky.summary == "Remote gateway takeover"
     assert 0 < len(risky.reasons) <= scorer.REASONS
@@ -71,6 +75,15 @@ def test_scores_levels_reasons_and_order(world):
     assert scorer.worst(results) == "KNOWN EXPLOITED"
     assert scorer.worst(results[1:]) == risky.level
     assert scorer.worst([]) is None
+
+
+def test_public_remote_exploit_makes_it_at_least_high(world):
+    con, saved = world
+    matches = [Match(cve, certain=True, fixed_in=None) for cve in ("CVE-002", "CVE-003")]
+    remote, local = scorer.Scorer(con, saved).score(matches)
+    assert remote.cve_id == "CVE-002"
+    assert (remote.level, remote.rule) == ("HIGH", scorer.REMOTE_EXPLOIT_RULE)
+    assert (local.level, local.rule) == ("LOW", None)  # local exploits don't count
 
 
 def test_nothing_to_score(world):
@@ -122,3 +135,9 @@ def test_describe(name, value, words):
 )
 def test_level_for(listed, share, level):
     assert scorer.level_for(listed, share) == level
+
+
+def test_remote_exploit_raises_but_never_lowers():
+    assert scorer.level_for(False, 0.5, remote_exploit=True) == "HIGH"
+    assert scorer.level_for(False, 0.96, remote_exploit=True) == "HIGH"
+    assert scorer.level_for(True, 0.5, remote_exploit=True) == "KNOWN EXPLOITED"

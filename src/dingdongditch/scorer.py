@@ -2,12 +2,18 @@
 
 Each CVE gets a level:
   KNOWN EXPLOITED  CISA already lists it as used in real attacks
-  HIGH             the model ranks it in the top 1% of all CVEs
+  HIGH             the model ranks it in the top 1% of all CVEs, or Exploit-DB has a
+                   public remote exploit for it (a rule, not the model: see below)
   MEDIUM           top 5%
   LOW              everything else
 
 plus the clues that raised its score most (the "why") and, where NVD says, the
 first release that fixes it.
+
+Why the rule: the model learns from CISA's list, which tracks current attack
+campaigns and rarely includes old CVEs (0.7% of pre-2012 CVEs with a public remote
+exploit, against 16.5% since 2018). So it ranks a 2007 bug low, even though anyone
+can run that exploit against a server that was never patched.
 """
 
 from __future__ import annotations
@@ -92,7 +98,8 @@ class ScoredCVE:
     cvss: float | None
     epss: float | None  # today's EPSS, for reference
     summary: str  # the start of NVD's description
-    reasons: list[str] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)  # the model's top clues
+    rule: str | None = None  # set when a rule, not the model, raised the level
 
 
 def describe(name: str, value: float) -> str | None:
@@ -115,10 +122,13 @@ def describe(name: str, value: float) -> str | None:
     return None
 
 
-def level_for(listed_by_cisa: bool, riskier_than: float) -> str:
+REMOTE_EXPLOIT_RULE = "public remote exploit on Exploit-DB, so at least HIGH"
+
+
+def level_for(listed_by_cisa: bool, riskier_than: float, remote_exploit: bool = False) -> str:
     if listed_by_cisa:
         return "KNOWN EXPLOITED"
-    if riskier_than >= HIGH_SHARE:
+    if riskier_than >= HIGH_SHARE or remote_exploit:
         return "HIGH"
     if riskier_than >= MEDIUM_SHARE:
         return "MEDIUM"
@@ -220,10 +230,13 @@ class Scorer:
                     if vendor:
                         vendors.add(vendor)
             cvss = item.cvss3_score if pd.notna(item.cvss3_score) else item.cvss2_score
+            listed, remote = isinstance(item.kev_added, str), item.exploit_remote > 0
+            level = level_for(listed, share, remote)
+            raised = level != level_for(listed, share)
             results.append(
                 ScoredCVE(
                     cve_id=item.id,
-                    level=level_for(isinstance(item.kev_added, str), share),
+                    level=level,
                     riskier_than=share,
                     certain=match.certain,
                     fixed_in=match.fixed_in,
@@ -231,6 +244,7 @@ class Scorer:
                     epss=epss.get(item.id),
                     summary=_summary(item.description),
                     reasons=reasons,
+                    rule=REMOTE_EXPLOIT_RULE if raised else None,
                 )
             )
         return sorted(results, key=lambda s: (LEVELS.index(s.level), -s.riskier_than, s.cve_id))
