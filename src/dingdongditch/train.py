@@ -133,6 +133,15 @@ def choose_settings(
     return Choice(settings=best, tried=tried)
 
 
+def score_spread(model: Pipeline, frame: pd.DataFrame) -> list[float]:
+    """1,001 scores that cut every CVE's score into 1,000 equal slices.
+
+    Saved with the model, they turn one CVE's score into "riskier than 99.3% of
+    all CVEs" without scoring all 400,000 again.
+    """
+    return np.quantile(scores(model, frame), np.linspace(0, 1, 1001)).tolist()
+
+
 def save(model: Pipeline, path: Path, info: dict) -> None:
     """Save a trained model with notes on how it was made (settings, date, counts)."""
     path.parent.mkdir(parents=True, exist_ok=True)

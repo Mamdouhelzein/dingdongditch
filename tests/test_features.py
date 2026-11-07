@@ -127,3 +127,12 @@ def test_fitted_vectorizer_can_be_saved_and_reused(con):
     again = pickle.loads(pickle.dumps(vectorizer))
     first = vectorizer.transform(frame).toarray()
     assert np.allclose(first, again.transform(frame).toarray())
+
+
+def test_load_can_fetch_only_some_cves(con):
+    everything = features.load(con, CUTOFF)
+    some = features.load(con, CUTOFF, ids=["CVE-A", "CVE-E", "CVE-C", "CVE-NONE"])
+    assert list(some["id"]) == ["CVE-A", "CVE-E"]  # CVE-C is after the cutoff
+    expected = everything[everything["id"].isin(["CVE-A", "CVE-E"])].reset_index(drop=True)
+    assert some.astype(str).equals(expected.astype(str))  # same values, whatever the types
+    assert list(features.load(con, CUTOFF, ids=[])["id"]) == []

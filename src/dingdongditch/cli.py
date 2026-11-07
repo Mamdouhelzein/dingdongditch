@@ -452,7 +452,8 @@ def train_command(
         train.save(
             model, out,
             {"settings": settings, "trained": collect.utc_now(), "cves": len(frame),
-             "exploited": exploited, "version": __version__},
+             "exploited": exploited, "version": __version__,
+             "spread": train.score_spread(model, frame)},
         )
     except EvaluationError as exc:
         err.print(f"[red]{exc}[/red]")

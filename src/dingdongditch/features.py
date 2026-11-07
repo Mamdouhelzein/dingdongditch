@@ -49,15 +49,24 @@ NUMBER_NAMES = [
 ]
 
 
-def load(con: sqlite3.Connection, cutoff: date) -> pd.DataFrame:
-    """One row per CVE published before the cutoff (rejected CVEs left out)."""
+def load(con: sqlite3.Connection, cutoff: date, ids: list[str] | None = None) -> pd.DataFrame:
+    """One row per CVE published before the cutoff (rejected CVEs left out).
+
+    With `ids`, only those CVEs: a scan needs a few hundred, not all 400,000.
+    """
     day = cutoff.isoformat()
+    only = ""
+    if ids is not None:
+        con.execute("CREATE TEMP TABLE IF NOT EXISTS wanted (id TEXT PRIMARY KEY)")
+        con.execute("DELETE FROM wanted")
+        con.executemany("INSERT OR IGNORE INTO wanted VALUES (?)", [(i,) for i in ids])
+        only = "AND {column} IN (SELECT id FROM wanted)"
     frame = pd.read_sql_query(
-        """
+        f"""
         SELECT c.id, c.published, c.description, c.cvss3_score, c.cvss3_vector,
                c.cvss2_score, c.cvss2_vector, c.cwes, k.date_added AS kev_added
         FROM cve c LEFT JOIN kev k ON k.cve_id = c.id
-        WHERE c.published < ? AND c.status != 'Rejected'
+        WHERE c.published < ? AND c.status != 'Rejected' {only.format(column="c.id")}
         ORDER BY c.id
         """,
         con,
@@ -65,18 +74,19 @@ def load(con: sqlite3.Connection, cutoff: date) -> pd.DataFrame:
     )
 
     products = defaultdict(set)
+    in_wanted = only.format(column="cve_id")
     for cve_id, vendor, product in con.execute(
-        "SELECT DISTINCT cve_id, vendor, product FROM cve_cpe"
+        f"SELECT DISTINCT cve_id, vendor, product FROM cve_cpe WHERE 1 {in_wanted}"
     ):
         products[cve_id].update((vendor, f"{vendor}:{product}"))
     frame["products"] = [" ".join(sorted(products.get(cve_id, ()))) for cve_id in frame["id"]]
 
     exploits = pd.read_sql_query(
-        """
+        f"""
         SELECT cve_id AS id, COUNT(*) AS exploits, MAX(verified) AS exploit_verified,
                MAX(type = 'remote') AS exploit_remote, MAX(type = 'webapps') AS exploit_webapps,
                MAX(type = 'local') AS exploit_local
-        FROM exploitdb WHERE published < ? GROUP BY cve_id
+        FROM exploitdb WHERE published < ? {only.format(column="cve_id")} GROUP BY cve_id
         """,
         con,
         params=(day,),
@@ -85,6 +95,8 @@ def load(con: sqlite3.Connection, cutoff: date) -> pd.DataFrame:
     columns = ["exploits", "exploit_verified", "exploit_remote", "exploit_webapps", "exploit_local"]
     frame[columns] = frame[columns].fillna(0).astype(int)
 
+    # A handful of CVEs may all lack a score, which would leave a column of None.
+    frame[["cvss3_score", "cvss2_score"]] = frame[["cvss3_score", "cvss2_score"]].astype(float)
     published = pd.to_datetime(frame["published"].str[:10])
     frame["age_days"] = (pd.Timestamp(cutoff) - published).dt.days
     return frame
