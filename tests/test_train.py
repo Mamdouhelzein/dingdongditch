@@ -108,3 +108,10 @@ def test_chosen_settings_are_in_the_grid():
 def test_unknown_kind_is_refused():
     with pytest.raises(ValueError, match="Unknown kind"):
         train.fit(make_frame(), CUTOFF, {"kind": "magic"}, min_count=1)
+
+
+def test_xgboost_is_only_needed_for_xgboost(monkeypatch):
+    monkeypatch.setattr(train, "xgboost_installed", lambda: False)
+    train._classifier(train.DEFAULT)  # logistic regression still works
+    with pytest.raises(train.MissingXGBoost, match=r"dingdongditch\[xgboost\]"):
+        train._classifier(train.XGBOOST_BEST)

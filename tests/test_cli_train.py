@@ -83,3 +83,11 @@ def test_empty_database_says_what_to_do(tmp_path):
     result = run("--db", str(path))
     assert result.exit_code == 1
     assert "no CVEs" in result.output
+
+
+def test_xgboost_missing_says_how_to_add_it(database, monkeypatch):
+    monkeypatch.setattr(train, "xgboost_installed", lambda: False)
+    result = run("--db", str(database), "--xgboost")
+    assert result.exit_code == 1
+    assert "pipx inject dingdongditch xgboost" in result.output
+    assert not database.with_name(train.MODEL_FILE).exists()

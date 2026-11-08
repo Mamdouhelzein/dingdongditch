@@ -9,6 +9,7 @@ the final test.
 
 from __future__ import annotations
 
+import importlib.util
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -20,7 +21,6 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
-from xgboost import XGBClassifier
 
 from dingdongditch.evaluate import (
     HORIZON,
@@ -66,12 +66,30 @@ XGBOOST_BEST = {"kind": "xgboost", "max_depth": 6, "scale_pos_weight": 20}
 MODEL_FILE = "model.joblib"  # saved next to the database
 
 
-def _classifier(settings: dict) -> LogisticRegression | XGBClassifier:
+class MissingXGBoost(ImportError):
+    """XGBoost is an optional extra, and it isn't installed."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "XGBoost isn't installed. Add it with `pipx inject dingdongditch xgboost`, "
+            "or `pip install \"dingdongditch[xgboost]\"`."
+        )
+
+
+def xgboost_installed() -> bool:
+    return importlib.util.find_spec("xgboost") is not None
+
+
+def _classifier(settings: dict):
     options = dict(settings)
     kind = options.pop("kind")
     if kind == "logistic":
         return LogisticRegression(solver="liblinear", max_iter=1000, **options)
     if kind == "xgboost":
+        if not xgboost_installed():
+            raise MissingXGBoost
+        from xgboost import XGBClassifier  # optional, and slow to import
+
         return XGBClassifier(
             n_estimators=400,
             learning_rate=0.05,

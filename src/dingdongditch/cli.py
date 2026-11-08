@@ -571,6 +571,9 @@ def train_command(
     ),
 ) -> None:
     """Train the model that ranks CVEs by how likely they are to be exploited."""
+    if use_xgboost and not train.xgboost_installed():
+        err.print(f"[red]{escape(str(train.MissingXGBoost()))}[/red]")
+        raise typer.Exit(1)
     try:
         cutoff = date.fromisoformat(test_date) if test_date else None
     except ValueError as exc:
