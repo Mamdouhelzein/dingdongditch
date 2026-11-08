@@ -11,6 +11,10 @@ A port scanner written from scratch in Python. It finds open TCP ports, works ou
 
 **Status:** the scanner works, `update-db` downloads the vulnerability data and trains a model that predicts which CVEs attackers will use next better than CVSS and EPSS did ([results](#how-good-is-the-model)), and every scan lists each port's CVEs, worst first, with [why and how to fix them](#risk-levels).
 
+![A Karen-mode scan of a Metasploitable 2 lab VM: three open ports, two confirmed problems and the worst CVEs for each service](https://raw.githubusercontent.com/Mamdouhelzein/dingdongditch/main/docs/demo.gif)
+
+<sub>A real scan of a lab VM, with the waiting sped up: it took about 50 seconds. The same output as text is just below.</sub>
+
 ## What it looks like
 
 A real scan of a Metasploitable 2 lab VM:
