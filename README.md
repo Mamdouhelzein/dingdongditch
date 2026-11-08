@@ -107,9 +107,10 @@ dingdongditch update-db                       # first run: 260 MB download, 10-1
 dingdongditch update-db --full                # check every year of NVD data again
 dingdongditch update-db --db ~/lab/vulns.db   # use another database file
 dingdongditch update-db --epss-date 2025-05-01  # also keep EPSS as it was on that day
+dingdongditch update-db --no-train            # don't retrain the risk model afterwards
 ```
 
-Later runs only fetch what changed. If one source fails to download, it keeps its old data and the others still update. The file is `vulns.db` in your user data folder (`~/.local/share/dingdongditch/` on Linux); set `DINGDONGDITCH_DB` to keep it somewhere else. Scans don't use it yet: matching services to CVEs is Part 4.
+Later runs only fetch what changed. If one source fails to download, it keeps its old data and the others still update. Then it retrains the [risk model](#risk-model) (about 2 minutes), so scans score each port with fresh data. The file is `vulns.db` in your user data folder (`~/.local/share/dingdongditch/` on Linux); set `DINGDONGDITCH_DB` or pass `--db` (to `scan` and `analyze` too) to keep it somewhere else.
 
 `--epss-date` keeps EPSS scores from a past day (back to April 2021). Today's EPSS already knows which CVEs got exploited since then, so a fair test of the model compares it with EPSS from before.
 

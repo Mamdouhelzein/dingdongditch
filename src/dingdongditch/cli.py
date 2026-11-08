@@ -78,11 +78,11 @@ _LEVEL_STYLES = {"KNOWN EXPLOITED": "bold red", "HIGH": "red", "MEDIUM": "yellow
 SHOWN = 3  # CVEs listed under the table for each port; --json has them all
 
 
-def _risks(services: list[Service]) -> list[list[ScoredCVE]] | None:
+def _risks(services: list[Service], db_path: Path | None) -> list[list[ScoredCVE]] | None:
     """Each service's scored CVEs, or None when there's no database or model yet."""
     if not any(targets(s) for s in services):  # nothing has a version to look up
         return [[] for _ in services]
-    path = db.default_path()
+    path = db_path or db.default_path()
     try:
         scorer = Scorer.open(path, path.with_name(train.MODEL_FILE))
     except ModelError as exc:
@@ -155,8 +155,8 @@ def _print_cves(svc: Service, scored: list[ScoredCVE]) -> None:
         console.print(f"  [dim]...and {len(scored) - SHOWN} more: --json lists them all.[/dim]")
 
 
-def _report(services: list[Service], as_json: bool) -> None:
-    risks = _risks(services)
+def _report(services: list[Service], as_json: bool, db_path: Path | None = None) -> None:
+    risks = _risks(services, db_path)
     if as_json:
         data = [s.to_dict() for s in services]
         for item, scored in zip(data, risks or [None] * len(data), strict=True):
@@ -332,6 +332,11 @@ def scan(
         help="Also save the raw results here: JSON (own engine) or nmap XML (nmap engine).",
     ),
     as_json: bool = typer.Option(False, "--json", help="Output JSON instead of a table."),
+    db_path: Path = typer.Option(
+        None, "--db",
+        help=f"Vulnerability database. Default: ${db.ENV_VAR} if set, else a per-user data "
+        "folder. The model is read from next to it.",
+    ),
 ) -> None:
     """Scan one or more targets, then analyze the results."""
     err.print("[yellow]Only scan systems you own or have written permission to test.[/yellow]")
@@ -353,7 +358,7 @@ def scan(
         err.print(f"[red]Scan failed:[/red] {exc}")
         raise typer.Exit(1) from exc
 
-    _report(services, as_json)
+    _report(services, as_json, db_path)
 
 
 @app.command()
@@ -362,6 +367,11 @@ def analyze(
         ..., help="Existing nmap XML report (from `nmap -sV -oX`), or '-' for stdin."
     ),
     as_json: bool = typer.Option(False, "--json", help="Output JSON instead of a table."),
+    db_path: Path = typer.Option(
+        None, "--db",
+        help=f"Vulnerability database. Default: ${db.ENV_VAR} if set, else a per-user data "
+        "folder. The model is read from next to it.",
+    ),
 ) -> None:
     """Analyze an nmap XML report you already have."""
     if report == "-":
@@ -379,7 +389,7 @@ def analyze(
         err.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
 
-    _report(services, as_json)
+    _report(services, as_json, db_path)
 
 
 @app.command("update-db")
@@ -396,8 +406,12 @@ def update_db(
         [], "--epss-date", metavar="YYYY-MM-DD",
         help="Also save the EPSS scores from this past day. Can be given more than once.",
     ),
+    no_train: bool = typer.Option(
+        False, "--no-train",
+        help="Don't retrain the risk model afterwards (it takes about 2 minutes).",
+    ),
 ) -> None:
-    """Download or refresh the vulnerability data (NVD, CISA KEV, Exploit-DB, EPSS)."""
+    """Download or refresh the vulnerability data, then retrain the risk model."""
     try:
         days = [date.fromisoformat(text) for text in epss_dates]
     except ValueError as exc:
@@ -450,6 +464,10 @@ def update_db(
                 ("With an EPSS score", "epss", "cve_id"),
             )
         ]
+        if not no_train and totals[0][1]:
+            failed |= not _train_after_update(con, path.with_name(train.MODEL_FILE))
+        elif not no_train:
+            err.print("[yellow]No CVEs yet, so no risk model was trained.[/yellow]")
     finally:
         con.close()
     console.print(f"\nDatabase: {escape(str(path))}", soft_wrap=True)
@@ -462,7 +480,45 @@ def update_db(
         raise typer.Exit(1)
 
 
+def _train_after_update(con: sqlite3.Connection, out: Path) -> bool:
+    """Retrain the default model on the fresh data. Returns whether it worked."""
+    started = time.monotonic()
+    try:
+        with err.status("Training the risk model, about 2 minutes..."):
+            cves, exploited = _train_and_save(con, train.DEFAULT, out)
+    except (EvaluationError, ValueError, sqlite3.Error) as exc:
+        err.print(f"[red]Training failed:[/red] {escape(str(exc))}")
+        return False
+    _print_trained(train.DEFAULT, cves, exploited, started, out)
+    return True
+
+
 _MODEL_NAMES = {"logistic": "a logistic regression", "xgboost": "an XGBoost"}
+
+
+def _train_and_save(con: sqlite3.Connection, settings: dict, out: Path) -> tuple[int, int]:
+    """Train on everything known today and save the model. Returns (CVEs, exploited)."""
+    # Everything known today: CVEs published up to now, every KEV entry so far.
+    today = date.today() + timedelta(days=1)
+    frame = features.load(con, today)
+    model = train.fit(frame, today, settings)
+    exploited = int(features.kev_between(frame, None, today).sum())
+    train.save(
+        model, out,
+        {"settings": settings, "trained": collect.utc_now(), "cves": len(frame),
+         "exploited": exploited, "version": __version__,
+         "spread": train.score_spread(model, frame)},
+    )
+    return len(frame), exploited
+
+
+def _print_trained(settings: dict, cves: int, exploited: int, started: float, out: Path) -> None:
+    minutes = (time.monotonic() - started) / 60
+    console.print(
+        f"Trained {_MODEL_NAMES[settings['kind']]} model on {cves:,} CVEs, "
+        f"{exploited:,} of them exploited, in {minutes:.0f} min."
+    )
+    console.print(f"Saved to {escape(str(out))}", soft_wrap=True)
 
 
 def _print_test(result: train.TestResult) -> None:
@@ -542,31 +598,15 @@ def train_command(
                 result = train.time_travel_test(con, cutoff, settings, date.today())
             _print_test(result)
             return
-        # Everything known today: CVEs published up to now, every KEV entry so far.
-        today = date.today() + timedelta(days=1)
-        with err.status("Training on every CVE known today..."):
-            frame = features.load(con, today)
-            model = train.fit(frame, today, settings)
-        exploited = int(features.kev_between(frame, None, today).sum())
         out = model_path or path.with_name(train.MODEL_FILE)
-        train.save(
-            model, out,
-            {"settings": settings, "trained": collect.utc_now(), "cves": len(frame),
-             "exploited": exploited, "version": __version__,
-             "spread": train.score_spread(model, frame)},
-        )
+        with err.status("Training on every CVE known today..."):
+            cves, exploited = _train_and_save(con, settings, out)
     except EvaluationError as exc:
         err.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
     finally:
         con.close()
-    minutes = (time.monotonic() - started) / 60
-    console.print(
-        f"Trained {_MODEL_NAMES[settings['kind']]} model on {len(frame):,} CVEs, "
-        f"{exploited:,} of them "
-        f"exploited, in {minutes:.0f} min."
-    )
-    console.print(f"Saved to {escape(str(out))}", soft_wrap=True)
+    _print_trained(settings, cves, exploited, started, out)
 
 
 if __name__ == "__main__":

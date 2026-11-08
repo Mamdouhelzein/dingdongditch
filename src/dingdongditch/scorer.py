@@ -185,7 +185,9 @@ class Scorer:
                 f"No vulnerability database at {db_path}: run `dingdongditch update-db`."
             )
         if not model_path.exists():
-            raise ModelError(f"No model at {model_path}: run `dingdongditch train`.")
+            raise ModelError(
+                f"No model at {model_path}: run `dingdongditch update-db` or `dingdongditch train`."
+            )
         try:
             con = db.connect(db_path)
         except db.DatabaseError as exc:

@@ -100,3 +100,17 @@ def test_database_text_cannot_restyle_the_output(data_dir, tmp_path, monkeypatch
     result = analyze(report)
     assert result.exit_code == 0, result.output
     assert "[blink]Gateway[/blink] takeover" in result.stdout
+
+
+def test_db_option_finds_the_database_and_model(data_dir, report):
+    result = analyze(report, "--json", "--db", str(data_dir / "vulns.db"))
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)[0]["risk"]["level"] == "KNOWN EXPLOITED"
+
+
+def test_missing_model_points_to_update_db(data_dir, tmp_path, report):
+    copy = tmp_path / "vulns.db"
+    copy.write_bytes((data_dir / "vulns.db").read_bytes())
+    result = analyze(report, "--db", str(copy))
+    assert result.exit_code == 0, result.output
+    assert "run `dingdongditch update-db` or `dingdongditch train`" in result.stderr

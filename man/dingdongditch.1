@@ -17,6 +17,7 @@ dingdongditch \- find open ports on hosts you own, and work out what is behind t
 .RB [ \-\-full ]
 .RB [ \-\-epss\-date
 .IR YYYY-MM-DD ]
+.RB [ \-\-no\-train ]
 .br
 .B dingdongditch train
 .RB [ \-\-db
@@ -50,10 +51,9 @@ exist, which it refuses before any login.
 It detects and never exploits.
 Only scan systems you own or have written permission to test.
 .PP
-Scans don't use the risk model yet, so the Risk column says
-.I model not trained yet
-unless a finding is
-.BR CONFIRMED .
+With a database and model from
+.BR update\-db ,
+the Risk column shows each port's worst CVE level and how many CVEs it has.
 .SH COMMANDS
 .TP
 .B scan
@@ -142,6 +142,11 @@ Also accepted by
 Use this database file instead of the default.
 See
 .BR DATABASE .
+Also accepted by
+.B scan
+and
+.BR analyze ,
+which read the model from next to it.
 .TP
 .B \-\-full
 Check every year of NVD data for changes, not just the last week's.
@@ -153,6 +158,12 @@ Also save the EPSS scores from this past day, so a model can be compared with
 EPSS as it was before it knew what happened next.
 Can be given more than once.
 Scores go back to April 2021.
+.TP
+.B \-\-no\-train
+Don't retrain the risk model after the download.
+Without it,
+.B update\-db
+trains the default model, about 2 minutes, and saves it next to the database.
 .SS train options
 .B \-\-db
 works as for
