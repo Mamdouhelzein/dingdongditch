@@ -333,7 +333,7 @@ What it learned makes sense. Products from Cisco, Ivanti, Microsoft, SonicWall a
 - [x] **Part 2:** collect data from NVD, CISA KEV, Exploit-DB and EPSS (`dingdongditch update-db`)
 - [x] **Part 3:** train a model on which CVEs really got exploited, and compare it with CVSS and EPSS (`dingdongditch train`)
 - [x] **Part 4:** match services to CVEs and show a risk score per port, with why and how to fix it
-- [ ] **Part 5:** demo GIF and PyPI release
+- [x] **Part 5:** demo GIF and PyPI release (0.1.0)
 
 Why a model? Knowing a service has CVEs is a database lookup. The hard part is prioritizing: an old OpenSSH can have dozens of CVEs, but only a few are ever exploited in the wild.
 
