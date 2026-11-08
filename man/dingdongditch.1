@@ -1,4 +1,4 @@
-.TH DINGDONGDITCH 1 2026-11-01 "DingDongDitch 0.1.0" "User Commands"
+.TH DINGDONGDITCH 1 2026-11-08 "DingDongDitch 0.1.0" "User Commands"
 .SH NAME
 dingdongditch \- find open ports on hosts you own, and work out what is behind them
 .SH SYNOPSIS
@@ -9,6 +9,8 @@ dingdongditch \- find open ports on hosts you own, and work out what is behind t
 .br
 .B dingdongditch analyze
 .RB [ \-\-json ]
+.RB [ \-\-db
+.IR file ]
 .I report
 .br
 .B dingdongditch update\-db
@@ -53,7 +55,10 @@ Only scan systems you own or have written permission to test.
 .PP
 With a database and model from
 .BR update\-db ,
-the Risk column shows each port's worst CVE level and how many CVEs it has.
+it then looks up each service's CVEs, gives each one a level, and explains the
+worst ones with why they matter and how to fix them.
+See
+.BR "RISK LEVELS" .
 .SH COMMANDS
 .TP
 .B scan
@@ -302,9 +307,10 @@ Its fields are
 .BR http_headers ,
 .BR tls_cert ,
 .BR os_guess ,
-.B os_evidence
+.BR os_evidence ,
+.B findings
 and
-.BR findings .
+.BR risk .
 Each finding has
 .BR check ,
 .BR title ,
@@ -312,6 +318,30 @@ Each finding has
 .B fix
 and
 .BR status .
+.PP
+.B risk
+is null when there is no database or model.
+Otherwise it has the port's worst
+.B level
+(null if no CVE was found) and
+.BR cves ,
+every CVE found, worst first.
+Each has
+.BR cve_id ,
+.BR level ,
+.B riskier_than
+(0 to 1),
+.B certain
+(false when only some of the releases the service could be are affected),
+.BR fixed_in ,
+.BR last_affected ,
+.BR cvss ,
+.BR epss ,
+.BR summary ,
+.B reasons
+and
+.B rule
+(set when a rule, not the model, raised the level).
 .SH MISSING PORTS
 Going too fast can make open ports look closed, especially inside a virtual
 machine or over a slow link.
@@ -394,6 +424,51 @@ The settings in use were chosen the same way, on the year before May 2025.
 Logistic regression is the default because it tied with XGBoost on the years
 it wasn't chosen on, trains ten times faster, and shows plainly which clues
 raised a score.
+.SH RISK LEVELS
+After a scan, each service's product and version is looked up in NVD's lists of
+affected products and versions.
+A patch such as OpenSSH's 4.7p1 counts as the release 4.7, and products NVD
+files under more than one vendor name (vsftpd, MySQL, ProFTPD, UnrealIRCd) are
+looked up under all of them.
+Each CVE found gets a level:
+.TP
+.B KNOWN EXPLOITED
+On CISA's list of CVEs used in real attacks.
+.TP
+.B HIGH
+The model ranks it in the top 1% of all CVEs, or Exploit-DB has a public remote
+exploit for it.
+.TP
+.B MEDIUM
+The model ranks it in the top 5%.
+.TP
+.B LOW
+Everything else.
+.PP
+The Risk column shows each port's worst level and how many CVEs it has, or
+.I no known CVEs
+(NVD lists none for that version),
+.I version unknown
+(nothing to look up;
+.B \-\-karen\-mode
+finds more versions), or
+.I no risk data
+(no database or model yet).
+Below the table, each port lists its three worst CVEs with the share of all
+CVEs the model ranks lower ("riskier than"), the CVSS score, today's EPSS, a
+summary, a
+.B Why
+line with the clues that raised the score most, and a
+.B Fix
+line with the first fixed release, or else the last affected one.
+.PP
+The remote-exploit rule: the model learns from CISA's list, which rarely
+includes old CVEs, so on its own it ranks an old bug low even when anyone can
+exploit it on a server that was never patched.
+A CVE with a public remote exploit on Exploit-DB is therefore always at least
+.BR HIGH ,
+and its Why line says the rule raised it.
+The rule never lowers a level.
 .SH LIMITATIONS
 .IP \(bu 2
 TCP only, so UDP services such as SNMP are not seen.
@@ -409,7 +484,15 @@ It gets a range of releases instead, from the source line its error came from.
 SMB versions need Karen mode and SMB1, which newer servers turn off.
 .IP \(bu 2
 Versions come from what a service says about itself, and Linux distributions
-often patch old versions without changing the number.
+often patch old versions without changing the number, so a CVE match can be a
+bug that is already fixed.
+.IP \(bu 2
+Some NVD entries name only the first fixed release, with no lower bound, so
+they match every older release too, even when the bug came later.
+Samba 3.0.20 gets CVE-2020-1472 this way.
+.IP \(bu 2
+NVD files some CVEs about one vendor's package under the product itself, and
+their fixed release can be a package number rather than the product's.
 .SH EXIT STATUS
 .TP
 .B 0
@@ -459,6 +542,9 @@ Use another database file and check every year of NVD data.
 .TP
 .B dingdongditch update\-db \-\-epss\-date 2025\-05\-01
 Also keep the EPSS scores from 1 May 2025.
+.TP
+.B dingdongditch analyze scan.xml \-\-db ~/lab/vulns.db
+Score a report's CVEs with the database and model kept in ~/lab.
 .TP
 .B dingdongditch train
 Train the model on everything known today and save it.

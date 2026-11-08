@@ -9,34 +9,66 @@
 
 A port scanner written from scratch in Python. It finds open TCP ports, works out which service and version is behind each one, and proves common misconfigurations without exploiting anything.
 
-**Status:** the scanner works, `update-db` downloads the vulnerability data, and `train` builds a model that predicts which CVEs attackers will use next better than CVSS and EPSS did ([results](#how-good-is-the-model)). Scans don't link services to CVEs yet, so the Risk column only shows confirmed problems for now.
+**Status:** the scanner works, `update-db` downloads the vulnerability data and trains a model that predicts which CVEs attackers will use next better than CVSS and EPSS did ([results](#how-good-is-the-model)), and every scan lists each port's CVEs, worst first, with [why and how to fix them](#risk-levels).
 
 ## What it looks like
 
 A real scan of a Metasploitable 2 lab VM:
 
 ```
-$ dingdongditch scan 192.168.195.130 -p 21,22,80,1524,3306 --karen-mode
+$ dingdongditch scan 192.168.195.130 -p 21,139,1524 --karen-mode
 
-                                       Open services
-┌─────────────────┬──────────┬───────────┬─────────────────────────┬───────────────────────┐
-│ Host            │ Port     │ Service   │ Product / version       │ Risk                  │
-├─────────────────┼──────────┼───────────┼─────────────────────────┼───────────────────────┤
-│ 192.168.195.130 │ 21/tcp   │ ftp       │ vsftpd 2.3.4            │ CONFIRMED             │
-│ 192.168.195.130 │ 22/tcp   │ ssh       │ OpenSSH 4.7p1           │ model not trained yet │
-│ 192.168.195.130 │ 80/tcp   │ http      │ Apache httpd 2.2.8      │ model not trained yet │
-│                 │          │           │ Metasploitable2 - Linux │                       │
-│ 192.168.195.130 │ 1524/tcp │ bindshell │ bindshell               │ CONFIRMED             │
-│ 192.168.195.130 │ 3306/tcp │ mysql     │ MySQL 5.0.51a           │ model not trained yet │
-└─────────────────┴──────────┴───────────┴─────────────────────────┴───────────────────────┘
-OS guess for 192.168.195.130: Ubuntu
-  from port 22 (ssh): Ubuntu; port 80 (http): Ubuntu; port 3306 (mysql): Ubuntu
+                                 Open services
+┌─────────────────┬──────────┬───────────┬───────────────────┬─────────────────┐
+│ Host            │ Port     │ Service   │ Product / version │ Risk            │
+├─────────────────┼──────────┼───────────┼───────────────────┼─────────────────┤
+│ 192.168.195.130 │ 21/tcp   │ ftp       │ vsftpd 2.3.4      │ CONFIRMED       │
+│                 │          │           │                   │ HIGH            │
+│                 │          │           │                   │ 3 CVEs          │
+│ 192.168.195.130 │ 139/tcp  │ smb       │ Samba smbd 3.0.20 │ KNOWN EXPLOITED │
+│                 │          │           │                   │ 64 CVEs         │
+│ 192.168.195.130 │ 1524/tcp │ bindshell │ bindshell         │ CONFIRMED       │
+│                 │          │           │                   │ version unknown │
+└─────────────────┴──────────┴───────────┴───────────────────┴─────────────────┘
+OS guess for 192.168.195.130: Debian
+  from port 139 (smb): Debian
 CONFIRMED 192.168.195.130:21 Anonymous FTP login allowed
   Why: Anyone can log in to this FTP server without an account.
   Fix: Disable anonymous access, e.g. anonymous_enable=NO in vsftpd.conf.
 CONFIRMED 192.168.195.130:1524 Open shell with no login
   Why: Anyone who connects gets a command prompt on this machine with no password. This is usually a backdoor.
-  Fix: Find and stop whatever is listening on this port, and treat the machine as compromised until you know how it got there.
+  Fix: Find and stop whatever is listening on this port, and treat the machine as compromised until you know how it
+got there.
+HIGH 192.168.195.130:21 vsftpd 2.3.4: 3 known CVEs (1 HIGH, 2 LOW)
+  CVE-2011-2523 HIGH (riskier than 99.8% of CVEs, CVSS 9.8, EPSS 96.2%)
+    vsftpd 2.3.4 downloaded between 20110630 and 20110703 contains a backdoor which opens a shell on port 6200/...
+    Why: no user action needed; public exploit on Exploit-DB; OS command injection (CWE-78)
+    Fix: NVD lists no fixed release: check the vendor's advisories
+  CVE-2021-3618 LOW (riskier than 82.5% of CVEs, CVSS 7.4, EPSS 2.0%)
+    ALPACA is an application layer protocol content confusion attack, exploiting TLS servers implementing diffe...
+    Why: no user action needed; affects debian_linux (debian); affects fedora (fedoraproject)
+    Fix: upgrade to 3.0.4 or later
+  CVE-2015-1419 LOW (riskier than 10.6% of CVEs, CVSS 5.0, EPSS 6.8%)
+    Unspecified vulnerability in vsftpd 3.0.2 and earlier allows remote attackers to bypass access restrictions...
+    Why: affects opensuse (opensuse); public for a long time; description says "bypass"
+    Fix: upgrade to a release newer than 3.0.2
+KNOWN EXPLOITED 192.168.195.130:139 Samba smbd 3.0.20: 64 known CVEs (1 KNOWN EXPLOITED, 7 HIGH, 5 MEDIUM, 51 LOW)
+  CVE-2020-1472 KNOWN EXPLOITED (riskier than 100.0% of CVEs, CVSS 5.5, EPSS 99.4%)
+    An elevation of privilege vulnerability exists when an attacker establishes a vulnerable Netlogon secure ch...
+    Why: on CISA's list of CVEs used in real attacks; no user action needed; affects microsoft products; remote
+    exploit on Exploit-DB
+    Fix: upgrade to 4.10.18 or later
+  CVE-2021-44142 HIGH (riskier than 99.2% of CVEs, CVSS 8.8, EPSS 73.6%)
+    The Samba vfs_fruit module uses extended file attributes (EA, xattr) to provide "...enhanced compatibility...
+    Why: no user action needed; affects enterprise_linux_for_power_big_endian (redhat); high CVSS score
+    Fix: upgrade to 4.13.17 or later
+  CVE-2020-25717 HIGH (riskier than 99.1% of CVEs, CVSS 8.1, EPSS 1.6%)
+    A flaw was found in the way Samba maps domain users to local users
+    Why: no user action needed; affects enterprise_linux_for_power_big_endian (redhat); affects debian_linux (debian)
+    Fix: upgrade to 4.13.14 or later
+  ...and 61 more: --json lists them all.
+CVEs are matched on the version number alone. Linux distributions often patch a bug without changing it, so check the
+installed package too.
 ```
 
 ## Install
@@ -81,6 +113,7 @@ dingdongditch scan 192.168.195.130 --json           # JSON instead of a table
 | `-e`, `--engine` | `own` (built in) or `nmap` | `own` |
 | `-o`, `--save` | Also save the results to a file | |
 | `--json` | Print JSON instead of a table | off |
+| `--db` | The vulnerability database; the model is read from next to it | your user data folder |
 
 Already have an nmap report? Read it the same way:
 
@@ -127,6 +160,42 @@ dingdongditch train --test 2025-05-01               # how it would have done fro
 
 `--test` is a fair time-travel test: it trains on only what was known that day, then checks how many of the CVEs CISA listed in the following year the model, CVSS and EPSS (as it was that day) would each have caught by fixing the top of their rankings. It saves nothing.
 
+## Risk levels
+
+After a scan, each service's product and version is looked up in NVD's lists of affected products. Every CVE found gets a level:
+
+| Level | Meaning |
+|---|---|
+| `KNOWN EXPLOITED` | On CISA's list of CVEs used in real attacks |
+| `HIGH` | The model ranks it in the top 1% of all CVEs, or Exploit-DB has a public remote exploit for it |
+| `MEDIUM` | The model ranks it in the top 5% |
+| `LOW` | Everything else |
+
+The Risk column shows each port's worst level and how many CVEs it has. Below the table, each port lists its three worst CVEs:
+
+- **riskier than X%:** the share of all CVEs the model ranks lower. Next to it are the CVSS score and today's EPSS, for reference.
+- **Why:** the clues that raised the model's score most, such as "no login needed", "public exploit on Exploit-DB" or a weakness type.
+- **Fix:** the first release NVD lists as fixed, or else the last one it lists as affected. Some CVEs have neither.
+
+**The remote-exploit rule.** The model learns from CISA's list, which tracks current attack campaigns and rarely includes old CVEs (see [What to keep in mind](#how-good-is-the-model)). On its own it ranks Samba's 2007 `usermap_script` bug low, even though anyone can run that exploit against a server that was never patched. So a CVE with a public remote exploit on Exploit-DB is always at least `HIGH`, and its Why line says the rule raised it. The rule only ever raises a level.
+
+The Risk column can also say:
+
+| It says | Meaning |
+|---|---|
+| `no known CVEs` | NVD lists no CVE for this product and version |
+| `version unknown` | The scan found no version, so there was nothing to look up. `--karen-mode` finds more, such as Samba, UnrealIRCd and Tomcat |
+| `no risk data` | There's no database or model yet: run `dingdongditch update-db` |
+
+With `--json`, each service gets a `risk` entry with its worst `level` and every CVE in `cves`: its level, `riskier_than` (0 to 1), whether it surely applies (`certain`), `fixed_in`, `last_affected`, CVSS, EPSS, a summary, the reasons, and the `rule` if one raised it.
+
+**Limits**
+
+- Matching uses the version number alone. Linux distributions often fix a bug without changing it, so check the installed package before you trust a match.
+- Some NVD entries say "before 4.10.18" with no lower bound. That matches every older release too, even when the bug came later: Samba 3.0.20 gets Zerologon (CVE-2020-1472) this way.
+- NVD files some CVEs about one vendor's package, such as a SUSE init script or the Windows installer for PostgreSQL, under the product itself, and their fix can be a package number like `9.4-0.5.3.1`.
+- When the scan narrows a version down to a few releases, like PostgreSQL's "one of 8.3.0-8.3.7", a CVE that affects only some of them says "only some of the versions it could be".
+
 ## Karen mode
 
 `--karen-mode` demands to speak to every port's manager.
@@ -157,12 +226,15 @@ These checks do the smallest exchange that proves the problem, then leave. They 
 
 ```
 your targets  →  find open ports  →  ask each port what it is  →  match the answer to a product
-              →  (Karen mode) web pages, certificates, OS guess, safe checks  →  report
+              →  (Karen mode) web pages, certificates, OS guess, safe checks
+              →  look up its CVEs  →  score and explain each one  →  report
 ```
 
 1. **Port finder:** an async TCP connect scan with a worker pool. Ports that time out get a second, slower try, and it slows down by itself if the system runs out of sockets.
-2. **Banner grabbing:** listens first, because many services speak first, then sends one harmless message. It tries TLS if plain text fails, and reads at most 4 KB. Services that only answer in their own protocol get one read-only question in it: DNS servers are asked their `version.bind`, and PostgreSQL gets a startup message for a protocol version that doesn't exist. It refuses before any login, and its error message shows which releases it could be.
-3. **Fingerprints:** regex rules turn a banner into a product, version and CPE name. The CPE is what will link a service to its CVEs.
+2. **Banner grabbing:** listens first, because many services speak first, then sends one harmless message. Ports that say nothing are asked once more a moment later, because a small machine can still be busy with the port scan. It tries TLS if plain text fails, and reads at most 4 KB. Services that only answer in their own protocol get one read-only question in it: DNS servers are asked their `version.bind`, and PostgreSQL gets a startup message for a protocol version that doesn't exist. It refuses before any login, and its error message shows which releases it could be.
+3. **Fingerprints:** regex rules turn a banner into a product, version and CPE name.
+4. **CVE matching:** the CPE's product and version are compared with NVD's affected versions and ranges. A patch like OpenSSH's `4.7p1` counts as `4.7`, and products NVD files under more than one vendor name (vsftpd, MySQL, ProFTPD, UnrealIRCd) are looked up under all of them.
+5. **Scoring:** the model scores each CVE, and its biggest clues become the Why line.
 
 ## How good is it?
 
@@ -171,6 +243,7 @@ Tested against a real Metasploitable 2:
 - A default scan found 24 open ports, and nmap's default top 1000 ports found 23. The two tools use different port lists.
 - A full Karen mode scan from Kali found 30 open ports.
 - Like nmap, it names BIND 9.4.2 and PostgreSQL 8.3 (one of 8.3.0 to 8.3.7) in every scan, and Samba 3.0.20 and UnrealIRCd 3.2.8.1 in Karen mode.
+- In Karen mode, every service with a version gets its CVEs. BIND, Apache, Samba and Tomcat are `KNOWN EXPLOITED`; vsftpd, OpenSSH, ProFTPD, MySQL and UnrealIRCd are `HIGH`. The three famous backdoors are all `HIGH`: vsftpd's from the model alone (riskier than 99.8% of CVEs), Samba's `usermap_script` and UnrealIRCd's from the remote-exploit rule.
 
 nmap still knows far more services, with thousands of probes. java-rmi, for example, is only named from its port number here.
 
@@ -232,7 +305,7 @@ What it learned makes sense. Products from Cisco, Ivanti, Microsoft, SonicWall a
 - [ ] Finish lab testing on Vulhub
 - [x] **Part 2:** collect data from NVD, CISA KEV, Exploit-DB and EPSS (`dingdongditch update-db`)
 - [x] **Part 3:** train a model on which CVEs really got exploited, and compare it with CVSS and EPSS (`dingdongditch train`)
-- [ ] **Part 4:** match services to CVEs and show a risk score per port, with why and how to fix it
+- [x] **Part 4:** match services to CVEs and show a risk score per port, with why and how to fix it
 - [ ] **Part 5:** demo GIF and PyPI release
 
 Why a model? Knowing a service has CVEs is a database lookup. The hard part is prioritizing: an old OpenSSH can have dozens of CVEs, but only a few are ever exploited in the wild.
@@ -263,7 +336,9 @@ src/dingdongditch/
   features.py      # CVEs as they were on a date → numbers for the model
   train.py         # trains, saves and time-travel-tests the model
   evaluate.py      # top 1% / 5% / 10% and the CVSS and EPSS baselines
-  matcher.py, scorer.py  # not built yet
+  versions.py      # compares version numbers the way NVD writes them
+  matcher.py       # a scanned service → the CVEs NVD lists for it
+  scorer.py        # levels, "riskier than", why and fix for each CVE
   data/            # PostgreSQL error line -> release table
 man/               # the man page
 scripts/           # rebuilds the PostgreSQL table from its source
