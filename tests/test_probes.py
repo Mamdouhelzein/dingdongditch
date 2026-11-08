@@ -241,6 +241,46 @@ def test_add_banners_fills_open_services_only():
     assert services[0].to_dict()["banner"] == "SSH-2.0-OpenSSH_7.4"
 
 
+def test_add_banners_asks_silent_ports_once_more(monkeypatch):
+    """Like a machine still busy with the port scan: silent at first, then it greets."""
+    monkeypatch.setattr(probes, "RETRY_PAUSE", 0.1)
+    connections = []
+
+    async def busy_then_greets(reader, writer):
+        connections.append(1)
+        # An unknown port gets an HTTP question, then the same over TLS: both stay silent.
+        if len(connections) > 2:
+            writer.write(b"SSH-2.0-OpenSSH_7.4\r\n")
+            await writer.drain()
+            await asyncio.sleep(0.5)
+        else:
+            await reader.read(100)
+        writer.close()
+
+    async def client(port):
+        services = [Service("127.0.0.1", port, "tcp", "open", name="ssh")]
+        return await asyncio.to_thread(add_banners, services, **FAST)
+
+    [svc] = run_with_server(busy_then_greets, client)
+    assert svc.banner == "SSH-2.0-OpenSSH_7.4"
+    assert len(connections) == 3  # the two silent tries, then the second round
+
+
+def test_add_banners_asks_only_once_when_the_first_try_worked(monkeypatch):
+    connections = []
+
+    async def greets(reader, writer):
+        connections.append(1)
+        await talks_first(b"SSH-2.0-OpenSSH_7.4\r\n")(reader, writer)
+
+    async def client(port):
+        services = [Service("127.0.0.1", port, "tcp", "open", name="ssh")]
+        return await asyncio.to_thread(add_banners, services, **FAST)
+
+    run_with_server(greets, client)
+    assert len(connections) == 1
+
+
 def test_add_banners_rejects_zero_concurrency():
     with pytest.raises(ValueError):
         add_banners([], concurrency=0)

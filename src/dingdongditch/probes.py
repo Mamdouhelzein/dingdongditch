@@ -25,6 +25,7 @@ TIMEOUT = 3.0             # connecting, and waiting for an answer to a probe
 GREETING_TIMEOUT = 12.0   # mail and FTP servers can stall on a lookup before saying hello
 MAX_BYTES = 4096          # never read more than this from one port
 DEFAULT_CONCURRENCY = 100  # lower than the port scan: each grab holds a connection longer
+RETRY_PAUSE = 2.0  # before asking the ports that said nothing a second time
 
 _QUIET_GAP = 0.3  # once a service has started talking, stop when it pauses this long
 _SLOW_GREETERS = {"ftp", "smtp", "submission", "pop3", "imap"}
@@ -258,9 +259,14 @@ async def _add_banners(
             banner = await grab_banner(svc.host, svc.port, listen, timeout, karen_mode)
             svc.banner, svc.tls = banner.text, banner.tls
 
-    await asyncio.gather(
-        *(one(s) for s in services if s.state == "open" and s.protocol == "tcp")
-    )
+    wanted = [s for s in services if s.state == "open" and s.protocol == "tcp"]
+    await asyncio.gather(*(one(s) for s in wanted))
+    # A small machine can still be busy with the port scan's flood of connections and
+    # miss the first try, so ask every port that said nothing once more.
+    silent = [s for s in wanted if not s.banner]
+    if silent:
+        await asyncio.sleep(RETRY_PAUSE)
+        await asyncio.gather(*(one(s) for s in silent))
 
 
 def add_banners(
