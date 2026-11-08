@@ -59,6 +59,10 @@ it then looks up each service's CVEs, gives each one a level, and explains the
 worst ones with why they matter and how to fix them.
 See
 .BR "RISK LEVELS" .
+Run
+.B dingdongditch update\-db
+once after installing (about 15 minutes the first time); until then scans work
+but show no risk data.
 .SH COMMANDS
 .TP
 .B scan
@@ -183,6 +187,10 @@ next to the database.
 Use XGBoost instead of logistic regression.
 It takes about 15 minutes instead of 2, and was about as good in the tests: a
 little better from May 2025, a little worse from May 2023.
+XGBoost is not installed by default; add it with
+.B pipx inject dingdongditch xgboost
+or
+.BR "pip install \(dqdingdongditch[xgboost]\(dq" .
 .TP
 .B \-\-test \fIYYYY-MM-DD\fR
 Save nothing.

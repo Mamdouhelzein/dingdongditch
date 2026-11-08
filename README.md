@@ -3,7 +3,8 @@
 > Knocks on every port, finds out who answers, and tells you which doors should never have been open.
 
 ![CI](https://github.com/Mamdouhelzein/dingdongditch/actions/workflows/ci.yml/badge.svg)
-![status](https://img.shields.io/badge/status-early%20development-orange)
+[![PyPI](https://img.shields.io/pypi/v/dingdongditch)](https://pypi.org/project/dingdongditch/)
+![status](https://img.shields.io/badge/status-alpha-orange)
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
@@ -77,19 +78,39 @@ installed package too.
 
 ## Install
 
-You need Python 3.10 or newer. It isn't on PyPI yet, so install it from GitHub with [pipx](https://pipx.pypa.io/):
+You need Python 3.10 or newer. Install it with [pipx](https://pipx.pypa.io/), which gives it its own environment:
 
 ```bash
-pipx install git+https://github.com/Mamdouhelzein/dingdongditch.git
+pipx install dingdongditch
 ```
 
-Run the same command with `--force` to update. On Linux this also installs the manual:
+`pipx upgrade dingdongditch` updates it. On Linux this also installs the manual:
 
 ```bash
 man dingdongditch
 ```
 
-nmap is optional. You only need it for `--engine nmap`.
+Then download the vulnerability data and train the risk model, once (about 15 minutes the first time, a few minutes after that):
+
+```bash
+dingdongditch update-db
+```
+
+Scans work without it, but the Risk column says "no risk data".
+
+XGBoost is optional, and only `train --xgboost` needs it:
+
+```bash
+pipx inject dingdongditch xgboost
+```
+
+nmap is optional too. You only need it for `--engine nmap`.
+
+To try the newest code from GitHub instead of the last release:
+
+```bash
+pipx install git+https://github.com/Mamdouhelzein/dingdongditch.git
+```
 
 ## Usage
 
@@ -161,6 +182,8 @@ dingdongditch train --xgboost                       # XGBoost instead: about 15 
 dingdongditch train --model ~/lab/model.joblib      # save it somewhere else
 dingdongditch train --test 2025-05-01               # how it would have done from that day
 ```
+
+`--xgboost` needs XGBoost, which isn't installed by default: add it with `pipx inject dingdongditch xgboost`.
 
 `--test` is a fair time-travel test: it trains on only what was known that day, then checks how many of the CVEs CISA listed in the following year the model, CVSS and EPSS (as it was that day) would each have caught by fixing the top of their rankings. It saves nothing.
 
@@ -344,6 +367,7 @@ src/dingdongditch/
   matcher.py       # a scanned service → the CVEs NVD lists for it
   scorer.py        # levels, "riskier than", why and fix for each CVE
   data/            # PostgreSQL error line -> release table
+docs/              # the demo GIF
 man/               # the man page
 scripts/           # rebuilds the PostgreSQL table from its source
 tests/             # pytest, using fake local servers
