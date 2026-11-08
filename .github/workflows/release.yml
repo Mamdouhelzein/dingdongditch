@@ -1,0 +1,111 @@
+# Publishing, with no passwords or tokens stored anywhere: PyPI's Trusted Publishing
+# checks that an upload really comes from this workflow in this repository.
+#
+#   Run workflow (Actions tab)  ->  a practice copy on TestPyPI, as 0.1.0.devN
+#   git push origin v0.1.0      ->  the real PyPI, then a GitHub release
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tag matches the version in pyproject.toml
+        if: github.event_name == 'push'
+        run: |
+          version=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match version $version in pyproject.toml"
+            exit 1
+          fi
+      - name: Practice version for TestPyPI
+        if: github.event_name == 'workflow_dispatch'
+        # TestPyPI never takes the same version twice, so each practice run gets its own.
+        run: sed -i -E "s/^version = \"([^\"]+)\"/version = \"\1.dev${GITHUB_RUN_NUMBER}\"/" pyproject.toml
+      - name: Build
+        run: |
+          pip install build twine
+          python -m build
+          twine check --strict dist/*
+      - name: The wheel installs and runs
+        run: |
+          python -m venv /tmp/try
+          /tmp/try/bin/pip install dist/*.whl
+          /tmp/try/bin/dingdongditch --version
+          test -e /tmp/try/share/man/man1/dingdongditch.1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  testpypi:
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/dingdongditch
+    permissions:
+      id-token: write  # lets PyPI check where the upload comes from
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  pypi:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/dingdongditch
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # to create the release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Create the release, with this version's CHANGELOG section as its notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            /^## / { on = (index($0, v) > 0); next }
+            on
+          ' CHANGELOG.md > notes.md 2>/dev/null || true
+          if [ -s notes.md ]; then
+            gh release create "$GITHUB_REF_NAME" dist/* --title "DingDongDitch $version" --notes-file notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --title "DingDongDitch $version" --generate-notes
+          fi
