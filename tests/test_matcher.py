@@ -27,6 +27,8 @@ ROWS = [
     ("CVE-PG-SOME", cpe("postgresql", "postgresql"), "8.3.0", None, None, "8.3.5"),
     ("CVE-PG-ALL", cpe("postgresql", "postgresql"), "8.3.0", None, None, "8.3.8"),
     ("CVE-PG-OLD", cpe("postgresql", "postgresql", "8.2.4"), None, None, None, None),
+    ("CVE-FTP-BACKDOOR", cpe("vsftpd_project", "vsftpd", "2.3.4"), None, None, None, None),
+    ("CVE-FTP-OLD", cpe("beasts", "vsftpd"), None, None, "2.3.4", None),
 ]
 
 
@@ -132,3 +134,22 @@ def test_match_service_end_to_end(con):
     assert ids(matcher.match_service(con, svc)) == ["CVE-ANY", "CVE-EXACT", "CVE-RANGE"]
     svc.cpes = []
     assert matcher.match_service(con, svc) == []
+
+
+def test_last_affected_release_when_nvd_names_no_fix(con):
+    [later] = [m for m in matcher.match_versions(con, "samba", "samba", ["3.0.22"])
+               if m.cve_id == "CVE-LATER"]
+    assert (later.fixed_in, later.last_affected) == (None, "3.0.24")
+
+
+def test_other_vendor_names_for_the_same_product(con):
+    assert matcher.same_product("vsftpd", "vsftpd") == [
+        ("vsftpd", "vsftpd"), ("beasts", "vsftpd"), ("vsftpd_project", "vsftpd"),
+    ]
+    assert matcher.same_product("samba", "samba") == [("samba", "samba")]
+    # nmap names vsftpd "vsftpd:vsftpd"; NVD uses neither of those vendor names.
+    svc = Service("h", 21, "tcp", "open", product="vsftpd", version="2.3.4",
+                  cpes=["cpe:/a:vsftpd:vsftpd:2.3.4"])
+    found = matcher.match_service(con, svc)
+    assert ids(found) == ["CVE-FTP-BACKDOOR", "CVE-FTP-OLD"]
+    assert found[1].last_affected == "2.3.4"

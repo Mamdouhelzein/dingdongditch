@@ -30,11 +30,30 @@ _PATCH = re.compile(r"[-_.]?(?:p\d+|[a-z])")  # 4.7 -> 4.7p1, 5.0.51 -> 5.0.51a,
 _ONE_OF = re.compile(r"^one of (.+)$")
 
 
+# NVD files some products under more than one vendor name over the years, and nmap
+# sometimes uses yet another. Any name in a group finds the CVEs of all of them.
+_SAME_PRODUCT = [
+    {("vsftpd", "vsftpd"), ("vsftpd_project", "vsftpd"), ("beasts", "vsftpd")},
+    {("mysql", "mysql"), ("oracle", "mysql")},
+    {("proftpd", "proftpd"), ("proftpd_project", "proftpd")},
+    {("unrealircd", "unrealircd"), ("unreal", "unrealircd")},
+]
+
+
+def same_product(vendor: str, product: str) -> list[tuple[str, str]]:
+    """Every vendor:product name NVD may use for this product, the given one first."""
+    for group in _SAME_PRODUCT:
+        if (vendor, product) in group:
+            return [(vendor, product), *sorted(group - {(vendor, product)})]
+    return [(vendor, product)]
+
+
 @dataclass(frozen=True)
 class Match:
     cve_id: str
     certain: bool  # False: only some of the releases the service could be are affected
     fixed_in: str | None  # the first release NVD lists as no longer affected, if it says
+    last_affected: str | None = None  # or else the last release NVD lists as affected
 
 
 def _patch_of(version: str, release: str) -> bool:
@@ -66,6 +85,7 @@ def match_versions(
         return []
     affected: dict[str, set[str]] = {}
     fixes: dict[str, list[str]] = {}
+    lasts: dict[str, list[str]] = {}
     rows = con.execute(
         """
         SELECT p.cve_id, p.cpe, p.version_start_including, p.version_start_excluding,
@@ -82,14 +102,22 @@ def match_versions(
         affected.setdefault(cve_id, set()).update(hit)
         if limits[3]:  # versionEndExcluding: the first release without the bug
             fixes.setdefault(cve_id, []).append(limits[3])
+        if limits[2]:  # versionEndIncluding: the last release with it
+            lasts.setdefault(cve_id, []).append(limits[2])
     return [
         Match(
             cve_id,
             certain=len(hit) == len(set(versions)),
             fixed_in=min(fixes[cve_id], key=sort_key) if cve_id in fixes else None,
+            last_affected=min(lasts[cve_id], key=sort_key) if cve_id in lasts else None,
         )
         for cve_id, hit in sorted(affected.items())
     ]
+
+
+def _lowest(*versions: str | None) -> str | None:
+    known = [v for v in versions if v]
+    return min(known, key=sort_key) if known else None
 
 
 def _expand(item: str) -> list[str]:
@@ -126,14 +154,15 @@ def match_service(con: sqlite3.Connection, svc: Service) -> list[Match]:
     """Every CVE that affects this service, or [] if its product or version is unknown."""
     merged: dict[str, Match] = {}
     for vendor, product, versions in targets(svc):
-        for match in match_versions(con, vendor, product, versions):
-            old = merged.get(match.cve_id)
-            if old:
-                fixes = [f for f in (old.fixed_in, match.fixed_in) if f]
-                match = Match(
-                    match.cve_id,
-                    old.certain or match.certain,
-                    min(fixes, key=sort_key) if fixes else None,
-                )
-            merged[match.cve_id] = match
+        for name in same_product(vendor, product):
+            for match in match_versions(con, *name, versions):
+                old = merged.get(match.cve_id)
+                if old:
+                    match = Match(
+                        match.cve_id,
+                        old.certain or match.certain,
+                        _lowest(old.fixed_in, match.fixed_in),
+                        _lowest(old.last_affected, match.last_affected),
+                    )
+                merged[match.cve_id] = match
     return sorted(merged.values(), key=lambda m: m.cve_id)
