@@ -8,6 +8,8 @@ import sqlite3
 import subprocess
 import sys
 import time
+from collections import Counter
+from dataclasses import asdict
 from datetime import date, timedelta
 from enum import Enum
 from pathlib import Path
@@ -15,6 +17,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 from rich.markup import escape
+from rich.padding import Padding
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -40,8 +43,10 @@ from dingdongditch.connect_scan import (
     Recheck,
 )
 from dingdongditch.evaluate import EvaluationError
+from dingdongditch.matcher import targets
 from dingdongditch.nmap_parser import Service, parse_nmap_xml
 from dingdongditch.nmap_scanner import PROFILES, NmapNotFoundError
+from dingdongditch.scorer import LEVELS, ModelError, ScoredCVE, Scorer, worst
 from dingdongditch.targets import split_targets
 
 app = typer.Typer(
@@ -69,22 +74,108 @@ def main(
     """DingDongDitch: ML-powered risk scoring for open ports."""
 
 
+_LEVEL_STYLES = {"KNOWN EXPLOITED": "bold red", "HIGH": "red", "MEDIUM": "yellow", "LOW": ""}
+SHOWN = 3  # CVEs listed under the table for each port; --json has them all
+
+
+def _risks(services: list[Service]) -> list[list[ScoredCVE]] | None:
+    """Each service's scored CVEs, or None when there's no database or model yet."""
+    if not any(targets(s) for s in services):  # nothing has a version to look up
+        return [[] for _ in services]
+    path = db.default_path()
+    try:
+        scorer = Scorer.open(path, path.with_name(train.MODEL_FILE))
+    except ModelError as exc:
+        err.print(f"[yellow]No risk scores: {escape(str(exc))}[/yellow]", soft_wrap=True)
+        return None
+    try:
+        with err.status("Looking up known CVEs..."):
+            return scorer.score_services(services)
+    except sqlite3.Error as exc:
+        err.print(f"[yellow]No risk scores: the database failed: {escape(str(exc))}[/yellow]")
+        return None
+    finally:
+        scorer.close()
+
+
+def _level(level: str) -> str:
+    style = _LEVEL_STYLES[level]
+    return f"[{style}]{level}[/{style}]" if style else level
+
+
+def _risk_cell(svc: Service, scored: list[ScoredCVE] | None) -> str:
+    lines = [f"[bold red]{escape(svc.findings[0].status)}[/bold red]"] if svc.findings else []
+    if scored is None:
+        lines.append("[dim]no risk data[/dim]")
+    elif scored:
+        count = f"{len(scored)} CVE" + ("s" if len(scored) > 1 else "")
+        lines += [_level(worst(scored)), f"[dim]{count}[/dim]"]
+    elif targets(svc):
+        lines.append("[dim]no known CVEs[/dim]")
+    else:
+        lines.append("[dim]version unknown[/dim]")
+    return "\n".join(lines)
+
+
+def _indented(spaces: int, markup: str) -> None:
+    """Print a line that wraps under its own indent, not back at the left edge."""
+    console.print(Padding(markup, (0, 0, 0, spaces), expand=False))
+
+
+def _print_cves(svc: Service, scored: list[ScoredCVE]) -> None:
+    counts = Counter(s.level for s in scored)
+    split = ", ".join(f"{counts[level]} {level}" for level in LEVELS if counts[level])
+    console.print(
+        f"{_level(worst(scored))} {escape(svc.host)}:{svc.port} {escape(svc.label)}: "
+        f"{len(scored)} known CVE{'s' if len(scored) > 1 else ''} ({split})"
+    )
+    for s in scored[:SHOWN]:
+        facts = [f"riskier than {s.riskier_than:.1%} of CVEs"]
+        if s.cvss is not None:
+            facts.append(f"CVSS {s.cvss:.1f}")
+        if s.epss is not None:
+            facts.append(f"EPSS {s.epss:.1%}")
+        maybe = "" if s.certain else ", only some of the versions it could be"
+        _indented(2, f"{s.cve_id} {_level(s.level)} ({', '.join(facts)}{escape(maybe)})")
+        _indented(4, f"[dim]{escape(s.summary)}[/dim]")
+        why = s.reasons
+        if s.rule:  # the rule already says what Exploit-DB has
+            why = [s.rule, *(r for r in why if not r.endswith("on Exploit-DB"))]
+        if s.level == "KNOWN EXPLOITED":
+            why = ["on CISA's list of CVEs used in real attacks", *why]
+        _indented(4, f"Why: {escape('; '.join(why) or 'no single clue stands out')}")
+        if s.fixed_in:
+            fix = f"upgrade to {s.fixed_in} or later"
+        elif s.last_affected:
+            fix = f"upgrade to a release newer than {s.last_affected}"
+        else:
+            fix = "NVD lists no fixed release: check the vendor's advisories"
+        _indented(4, f"Fix: {escape(fix)}")
+    if len(scored) > SHOWN:
+        console.print(f"  [dim]...and {len(scored) - SHOWN} more: --json lists them all.[/dim]")
+
+
 def _report(services: list[Service], as_json: bool) -> None:
+    risks = _risks(services)
     if as_json:
-        print(json.dumps([s.to_dict() for s in services], indent=2))
+        data = [s.to_dict() for s in services]
+        for item, scored in zip(data, risks or [None] * len(data), strict=True):
+            item["risk"] = None if scored is None else {
+                "level": worst(scored), "cves": [asdict(s) for s in scored],
+            }
+        print(json.dumps(data, indent=2))
         return
 
     if not services:
         console.print("No open ports found.")
         return
 
+    scored_list = risks or [None] * len(services)
     table = Table(title="Open services")
     for col in ("Host", "Port", "Service", "Product / version", "Risk"):
         table.add_column(col)
-    for s in services:
-        risk = "[dim]model not trained yet[/dim]"
-        if s.findings:
-            risk = f"[bold red]{escape(s.findings[0].status)}[/bold red]"
+    for s, scored in zip(services, scored_list, strict=True):
+        risk = _risk_cell(s, scored)
         # Everything below comes from the scanned service: escape it so text like
         # "[red]" in a banner or page title can't restyle or fake the output.
         product = escape(s.label)
@@ -114,6 +205,15 @@ def _report(services: list[Service], as_json: bool) -> None:
             )
             console.print(f"  Why: {escape(finding.why)}")
             console.print(f"  Fix: {escape(finding.fix)}")
+
+    for s, scored in zip(services, scored_list, strict=True):
+        if scored:
+            _print_cves(s, scored)
+    if any(scored_list):
+        console.print(
+            "[dim]CVEs are matched on the version number alone. Linux distributions often "
+            "patch a bug without changing it, so check the installed package too.[/dim]"
+        )
 
 
 class Engine(str, Enum):

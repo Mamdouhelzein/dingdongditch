@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import bisect
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -28,7 +28,8 @@ import pandas as pd
 from scipy import sparse
 
 from dingdongditch import db, features
-from dingdongditch.matcher import Match
+from dingdongditch.matcher import Match, match_service
+from dingdongditch.nmap_parser import Service
 from dingdongditch.train import load_saved
 
 LEVELS = ("KNOWN EXPLOITED", "HIGH", "MEDIUM", "LOW")  # worst first
@@ -100,6 +101,7 @@ class ScoredCVE:
     summary: str  # the start of NVD's description
     reasons: list[str] = field(default_factory=list)  # the model's top clues
     rule: str | None = None  # set when a rule, not the model, raised the level
+    last_affected: str | None = None  # when NVD names no fix: the last affected release
 
 
 def describe(name: str, value: float) -> str | None:
@@ -122,6 +124,7 @@ def describe(name: str, value: float) -> str | None:
     return None
 
 
+_EXPLOIT_DB = "on Exploit-DB"
 REMOTE_EXPLOIT_RULE = "public remote exploit on Exploit-DB, so at least HIGH"
 
 
@@ -140,8 +143,18 @@ def worst(scored: list[ScoredCVE]) -> str | None:
     return min((s.level for s in scored), key=LEVELS.index, default=None)
 
 
+def _worst_first(s: ScoredCVE) -> tuple:
+    return LEVELS.index(s.level), -s.riskier_than, s.cve_id
+
+
+_NO_NEWS = ("an issue was discovered in", "a vulnerability was found in")
+
+
 def _summary(description: str, limit: int = 110) -> str:
-    first = description.split(". ")[0].strip()
+    sentences = [s.strip() for s in description.split(". ") if s.strip()] or [""]
+    first = sentences[0]
+    if len(sentences) > 1 and first.lower().startswith(_NO_NEWS):  # says nothing yet
+        first = sentences[1]
     return first if len(first) <= limit else first[: limit - 3].rstrip() + "..."
 
 
@@ -186,6 +199,33 @@ class Scorer:
             con.close()
             raise ModelError(f"Can't read the model at {model_path}: {exc}") from exc
 
+    def close(self) -> None:
+        self.con.close()
+
+    def score_services(self, services: list[Service]) -> list[list[ScoredCVE]]:
+        """Each service's CVEs, scored and worst first.
+
+        A CVE found on several ports is scored once: only whether it surely applies
+        and which release fixes it differ from port to port.
+        """
+        found = [match_service(self.con, svc) for svc in services]
+        unique = {m.cve_id: m for matches in found for m in matches}
+        scored = {s.cve_id: s for s in self.score(list(unique.values()))}
+        return [
+            sorted(
+                (
+                    replace(
+                        scored[m.cve_id], certain=m.certain, fixed_in=m.fixed_in,
+                        last_affected=m.last_affected,
+                    )
+                    for m in matches
+                    if m.cve_id in scored
+                ),
+                key=_worst_first,
+            )
+            for matches in found
+        ]
+
     def riskier_than(self, score: float) -> float:
         return bisect.bisect_left(self.spread, score) / (len(self.spread) - 1)
 
@@ -222,9 +262,11 @@ class Scorer:
                     break
                 group, _, item_name = names[index].partition("__")
                 vendor = item_name.partition(":")[0] if group == "product" else None
+                words = describe(names[index], matrix[row, index])
+                if words and words.endswith(_EXPLOIT_DB):  # one Exploit-DB clue is enough
+                    vendor = _EXPLOIT_DB
                 if vendor in vendors:
                     continue
-                words = describe(names[index], matrix[row, index])
                 if words and words not in reasons:
                     reasons.append(words)
                     if vendor:
@@ -240,6 +282,7 @@ class Scorer:
                     riskier_than=share,
                     certain=match.certain,
                     fixed_in=match.fixed_in,
+                    last_affected=match.last_affected,
                     cvss=float(cvss) if pd.notna(cvss) else None,
                     epss=epss.get(item.id),
                     summary=_summary(item.description),
@@ -247,4 +290,4 @@ class Scorer:
                     rule=REMOTE_EXPLOIT_RULE if raised else None,
                 )
             )
-        return sorted(results, key=lambda s: (LEVELS.index(s.level), -s.riskier_than, s.cve_id))
+        return sorted(results, key=_worst_first)

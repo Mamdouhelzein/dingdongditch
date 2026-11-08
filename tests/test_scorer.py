@@ -1,53 +1,17 @@
 """Scoring and explaining matched CVEs, with a model trained on a small made-up NVD."""
 
-from datetime import date, timedelta
-
 import pytest
+import risk_world
 
-from dingdongditch import db, features, scorer, train
+from dingdongditch import db, scorer
 from dingdongditch.matcher import Match
-
-V3_EASY = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-V3_HARD = "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N"
+from dingdongditch.nmap_parser import Service
 
 
 @pytest.fixture(scope="module")
 def world():
-    """60 CVEs: the 'gateway' ones get exploited, a few are already on CISA's list."""
     con = db.connect(":memory:")
-    cves, kev = [], []
-    for n in range(60):
-        risky = n % 5 == 0
-        cves.append((
-            f"CVE-{n:03}",
-            "2020-01-01T00:00:00.000",
-            "Remote gateway takeover. More text." if risky else "Minor printer glitch. More.",
-            9.8 if risky else 3.1,
-            V3_EASY if risky else V3_HARD,
-            "CWE-78" if risky else "CWE-79",
-        ))
-        if risky and n < 40:
-            kev.append((f"CVE-{n:03}", "2021-01-01"))
-    con.executemany(
-        "INSERT INTO cve (id, published, last_modified, status, description, cvss3_score, "
-        "cvss3_vector, cvss2_score, cvss2_vector, cwes) "
-        "VALUES (?, ?, 'm', 'Analyzed', ?, ?, ?, 5.0, 'AV:N/AC:L/Au:N/C:P/I:P/A:P', ?)",
-        cves,
-    )
-    con.executemany(
-        "INSERT INTO cve_cpe (cve_id, part, vendor, product, cpe) VALUES (?, 'a', ?, ?, 'x')",
-        [(cve[0], *(("acme", "gateway") if "gateway" in cve[2] else ("printco", "printer")))
-         for cve in cves],
-    )
-    con.executemany("INSERT INTO kev VALUES (?, 'v', 'p', 'n', ?, 'Unknown')", kev)
-    con.execute("INSERT INTO epss VALUES ('CVE-045', 0.42, 0.99)")
-    # A boring CVE with an old public remote exploit, and one with only a local exploit.
-    con.execute("INSERT INTO exploitdb VALUES (1, 'CVE-002', '2010-01-01', 'remote', 'unix', 1)")
-    con.execute("INSERT INTO exploitdb VALUES (2, 'CVE-003', '2010-01-01', 'local', 'unix', 1)")
-    today = date.today() + timedelta(days=1)
-    frame = features.load(con, today)
-    model = train.fit(frame, today, train.DEFAULT, min_count=1)
-    saved = {"model": model, "spread": train.score_spread(model, frame)}
+    saved = risk_world.fill(con)
     yield con, saved
     con.close()
 
@@ -84,6 +48,25 @@ def test_public_remote_exploit_makes_it_at_least_high(world):
     assert remote.cve_id == "CVE-002"
     assert (remote.level, remote.rule) == ("HIGH", scorer.REMOTE_EXPLOIT_RULE)
     assert (local.level, local.rule) == ("LOW", None)  # local exploits don't count
+
+
+def test_score_services_keeps_each_ports_own_match(world):
+    con, saved = world
+
+    def gateway(port, version, extrainfo=""):
+        return Service("10.0.0.1", port, "tcp", "open", product="gateway", version=version,
+                       extrainfo=extrainfo, cpes=[f"cpe:/a:acme:gateway:{version}"])
+
+    old, unsure, new, unknown = scorer.Scorer(con, saved).score_services([
+        gateway(1, "1.5"),
+        gateway(2, "2", extrainfo="one of 1.9, 2.1"),  # only 1.9 is affected
+        gateway(3, "2.0"),
+        Service("10.0.0.1", 4, "tcp", "open", name="ssh"),
+    ])
+    assert len(old) == len(unsure) == 12 and new == unknown == []
+    assert old[0].level == "KNOWN EXPLOITED"
+    assert all(s.certain for s in old) and not any(s.certain for s in unsure)
+    assert {s.fixed_in for s in old} == {"2.0"}
 
 
 def test_nothing_to_score(world):
@@ -141,3 +124,16 @@ def test_remote_exploit_raises_but_never_lowers():
     assert scorer.level_for(False, 0.5, remote_exploit=True) == "HIGH"
     assert scorer.level_for(False, 0.96, remote_exploit=True) == "HIGH"
     assert scorer.level_for(True, 0.5, remote_exploit=True) == "KNOWN EXPLOITED"
+
+
+@pytest.mark.parametrize(
+    "description, summary",
+    [
+        ("Remote takeover. More.", "Remote takeover"),
+        ("An issue was discovered in Foo 1.2. A long name crashes it.", "A long name crashes it."),
+        ("An issue was discovered in Foo 1.2", "An issue was discovered in Foo 1.2"),
+        ("x" * 200, "x" * 107 + "..."),
+    ],
+)
+def test_summary(description, summary):
+    assert scorer._summary(description) == summary
