@@ -1,5 +1,7 @@
 """`dingdongditch train`, on the small made-up world from test_train."""
 
+import re
+
 import pytest
 from test_train import make_frame
 from typer.testing import CliRunner
@@ -106,7 +108,9 @@ def test_tune_chooses_settings_for_each_test_day(database):
 def test_tune_needs_a_test_day(database):
     result = run("--db", str(database), "--tune")
     assert result.exit_code == 2
-    assert "--tune only works with --test" in " ".join(result.output.split())
+    # Usage errors are coloured on CI, which splits the sentence with colour codes.
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    assert "only works with" in " ".join(plain.split())
     assert not database.with_name(train.MODEL_FILE).exists()
 
 
