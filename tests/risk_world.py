@@ -1,8 +1,11 @@
 """A small made-up NVD with a model trained on it, for the scoring tests.
 
-60 CVEs: every fifth one is a risky 'gateway' CVE (acme gateway before 2.0), the
-others are boring printer CVEs (printco printer 1.0 only). Most risky ones are
+60 CVEs: every fifth one is a risky 'gateway' CVE (acme gateway from 1.0 up to 2.0),
+the others are boring printer CVEs (printco printer 1.0 only). Most risky ones are
 already on CISA's list.
+
+add_open_ended() then adds NVD rows with no first affected release, which only
+ever match as possible.
 """
 
 from datetime import date, timedelta
@@ -13,6 +16,11 @@ V3_EASY = "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
 V3_HARD = "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:U/C:L/I:N/A:N"
 GATEWAY = "cpe:2.3:a:acme:gateway:*:*:*:*:*:*:*:*"
 PRINTER = "cpe:2.3:a:printco:printer:1.0:*:*:*:*:*:*:*"
+ROUTER = "cpe:2.3:a:netco:router:*:*:*:*:*:*:*:*"
+_CPE_ROW = (
+    "INSERT INTO cve_cpe (cve_id, part, vendor, product, cpe, version_start_including, "
+    "version_end_excluding) VALUES (?, 'a', ?, ?, ?, ?, ?)"
+)
 
 
 def fill(con) -> dict:
@@ -37,11 +45,10 @@ def fill(con) -> dict:
         cves,
     )
     con.executemany(
-        "INSERT INTO cve_cpe (cve_id, part, vendor, product, cpe, version_end_excluding) "
-        "VALUES (?, 'a', ?, ?, ?, ?)",
+        _CPE_ROW,
         [
-            (cve[0], "acme", "gateway", GATEWAY, "2.0") if "gateway" in cve[2]
-            else (cve[0], "printco", "printer", PRINTER, None)
+            (cve[0], "acme", "gateway", GATEWAY, "1.0", "2.0") if "gateway" in cve[2]
+            else (cve[0], "printco", "printer", PRINTER, None, None)
             for cve in cves
         ],
     )
@@ -55,3 +62,21 @@ def fill(con) -> dict:
     frame = features.load(con, today)
     model = train.fit(frame, today, train.DEFAULT, min_count=1)
     return {"model": model, "spread": train.score_spread(model, frame)}
+
+
+def add_open_ended(con) -> None:
+    """Rows that say "every release before X", for a database fill() already filled.
+
+    The boring CVE-007 for every gateway before 3.0, and for every netco router
+    before 9.0 the listed CVE-005 and the boring CVE-006. Added after training, so
+    the model is the same one the other tests use.
+    """
+    con.executemany(
+        _CPE_ROW,
+        [
+            ("CVE-007", "acme", "gateway", GATEWAY, None, "3.0"),
+            ("CVE-005", "netco", "router", ROUTER, None, "9.0"),
+            ("CVE-006", "netco", "router", ROUTER, None, "9.0"),
+        ],
+    )
+    con.commit()

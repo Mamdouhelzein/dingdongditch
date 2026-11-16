@@ -14,6 +14,7 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
+from itertools import pairwise
 from pathlib import Path
 
 import joblib
@@ -23,13 +24,20 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 
 from dingdongditch.evaluate import (
+    EPSS,
     HORIZON,
+    MODEL,
     EvaluationError,
+    Judged,
     cvss_scores,
     epss_scores,
     exploit_scores,
+    judge,
     make_test_set,
     measure,
+    pool,
+    says_exploited,
+    without,
 )
 from dingdongditch.features import kev_between, load, make_vectorizer
 
@@ -57,6 +65,9 @@ GRID = LOGISTIC + XGBOOST
 # against 0.057), logistic regression ahead from 2023-05-01 (0.020 against 0.014).
 # On a tie the simpler model wins: it trains ten times faster, and each clue's
 # weight can be read straight off it to explain a score.
+# That choice was made after looking at both test years, so their numbers for the
+# default model are a little flattering. time_travel_test(tune=True) avoids it: it
+# picks the settings again for each test day, from the year before that day only.
 # After CVSS became one v3-or-v2 set of features, the same check picked C=0.3 again,
 # and logistic regression scored 0.060 (2025) and 0.022 (2023). XGBoost's figures
 # above are from before that change.
@@ -177,16 +188,27 @@ def load_saved(path: Path) -> dict:
 @dataclass(frozen=True)
 class TestResult:
     cutoff: date
-    judged: int  # CVEs public and not yet on CISA's list at the cutoff
-    listed: int  # how many of them CISA listed in the year after
-    rows: list[tuple[str, dict[str, float]]]  # each ranking and its measures
+    settings: dict  # what the model was trained with
+    tuned: bool  # True: the settings were chosen on the year before the cutoff
     epss_missing: bool  # no EPSS scores were saved for the cutoff day
+    everything: Judged  # every CVE public and not yet on CISA's list at the cutoff
+    said_exploited: int  # listed CVEs whose description says they were attacked
+    without_those: Judged | None  # the same test without any CVE that says so
 
 
 def time_travel_test(
-    con: sqlite3.Connection, cutoff: date, settings: dict, today: date
+    con: sqlite3.Connection,
+    cutoff: date,
+    settings: dict,
+    today: date,
+    tune: list[dict] | None = None,
 ) -> TestResult:
-    """Train on what was known on `cutoff`, then judge every ranking on the year after."""
+    """Train on what was known on `cutoff`, then judge every ranking on the year after.
+
+    With `tune` (a grid of settings), `settings` is only the fallback: the best of
+    the grid is chosen by standing a year before the cutoff and judging on the year
+    up to it, so nothing after the cutoff has any say in how the model is built.
+    """
     if cutoff + HORIZON > today:
         raise EvaluationError(
             f"The year after {cutoff.isoformat()} isn't over yet, so the test can't be "
@@ -198,12 +220,45 @@ def time_travel_test(
         raise EvaluationError(
             f"CISA listed none of the CVEs public on {cutoff.isoformat()} in the year after"
         )
+    tuned = False
+    if tune:
+        earlier = cutoff - HORIZON
+        try:
+            settings = choose_settings(load(con, earlier), earlier, tune).settings
+            tuned = True
+        except EvaluationError:
+            pass  # CISA's list is too young a year earlier: keep the given settings
     rankings = {"CVSS": cvss_scores(frame), "Public exploit": exploit_scores(frame)}
     epss_missing = False
     try:
-        rankings[f"EPSS on {cutoff.isoformat()}"] = epss_scores(con, frame, cutoff)
+        rankings[EPSS] = epss_scores(con, frame, cutoff)
     except EvaluationError:
         epss_missing = True
-    rankings["Our model"] = scores(fit(frame, cutoff, settings), frame)
-    rows = [(name, measure(ranking[test.rows], test.listed)) for name, ranking in rankings.items()]
-    return TestResult(cutoff, len(test.rows), int(test.listed.sum()), rows, epss_missing)
+    rankings[MODEL] = scores(fit(frame, cutoff, settings), frame)
+
+    giveaway = says_exploited(frame)
+    strict = without(test, giveaway)
+    return TestResult(
+        cutoff=cutoff,
+        settings=settings,
+        tuned=tuned,
+        epss_missing=epss_missing,
+        everything=judge(rankings, test),
+        said_exploited=int(giveaway[test.rows][test.listed].sum()),
+        without_those=judge(rankings, strict) if strict.listed.any() else None,
+    )
+
+
+def pooled(results: list[TestResult]) -> tuple[Judged, Judged | None] | None:
+    """Several test days judged as one, or None if their years overlap.
+
+    Returns the pooled test and the pooled giveaway check (None if a day has none).
+    """
+    days = sorted(result.cutoff for result in results)
+    if len(days) < 2 or any(later - day < HORIZON for day, later in pairwise(days)):
+        return None
+    strict = [result.without_those for result in results]
+    return (
+        pool([result.everything for result in results]),
+        pool(strict) if all(strict) else None,
+    )

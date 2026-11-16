@@ -69,6 +69,40 @@ def test_score_services_keeps_each_ports_own_match(world):
     assert {s.fixed_in for s in old} == {"2.0"}
 
 
+def test_possible_matches_come_last_and_never_set_the_level(world):
+    con, saved = world
+    matches = [
+        Match("CVE-005", certain=True, fixed_in="9.0", open_ended=True),  # listed by CISA
+        Match("CVE-001", certain=True, fixed_in=None),  # boring, but its version is named
+    ]
+    sure, possible = scorer.Scorer(con, saved).score(matches)
+    assert (sure.cve_id, sure.open_ended) == ("CVE-001", False)
+    assert (possible.cve_id, possible.open_ended) == ("CVE-005", True)
+    assert possible.level == "KNOWN EXPLOITED"  # the CVE keeps its own level
+    assert scorer.worst([sure, possible]) == "LOW"
+    assert scorer.worst([sure, possible], possible=True) == "KNOWN EXPLOITED"
+    assert scorer.worst([possible]) is None
+    assert scorer.worst([sure], possible=True) is None
+
+
+def test_score_services_marks_possible_matches():
+    con = db.connect(":memory:")
+    saved = risk_world.fill(con)
+    risk_world.add_open_ended(con)
+    gateway, router = scorer.Scorer(con, saved).score_services([
+        Service("10.0.0.1", 1, "tcp", "open", product="gateway", version="1.5",
+                cpes=["cpe:/a:acme:gateway:1.5"]),
+        Service("10.0.0.1", 2, "tcp", "open", product="router", version="3.0",
+                cpes=["cpe:/a:netco:router:3.0"]),
+    ])
+    con.close()
+    assert [s.open_ended for s in gateway] == [False] * 12 + [True]
+    assert gateway[-1].cve_id == "CVE-007"
+    assert [(s.cve_id, s.open_ended) for s in router] == [("CVE-005", True), ("CVE-006", True)]
+    # CVE-005 is a sure match for the gateway and only a possible one for the router.
+    assert not next(s for s in gateway if s.cve_id == "CVE-005").open_ended
+
+
 def test_nothing_to_score(world):
     con, saved = world
     assert scorer.Scorer(con, saved).score([]) == []

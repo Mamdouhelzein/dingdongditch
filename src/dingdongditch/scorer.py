@@ -10,6 +10,10 @@ Each CVE gets a level:
 plus the clues that raised its score most (the "why") and, where NVD says, the
 first release that fixes it.
 
+A CVE that only matched through a range with no first affected release (see
+matcher.py) keeps its level, but is marked open-ended. Reports list those as
+possible, after the sure ones, and a port's own level comes from the sure ones.
+
 Why the rule: the model learns from CISA's list, which tracks current attack
 campaigns and rarely includes old CVEs (0.7% of pre-2012 CVEs with a public remote
 exploit, against 16.5% since 2018). So it ranks a 2007 bug low, even though anyone
@@ -102,6 +106,7 @@ class ScoredCVE:
     reasons: list[str] = field(default_factory=list)  # the model's top clues
     rule: str | None = None  # set when a rule, not the model, raised the level
     last_affected: str | None = None  # when NVD names no fix: the last affected release
+    open_ended: bool = False  # True: possible only, NVD names no first affected release
 
 
 def describe(name: str, value: float) -> str | None:
@@ -138,13 +143,14 @@ def level_for(listed_by_cisa: bool, riskier_than: float, remote_exploit: bool = 
     return "LOW"
 
 
-def worst(scored: list[ScoredCVE]) -> str | None:
-    """The most serious level among a service's CVEs."""
-    return min((s.level for s in scored), key=LEVELS.index, default=None)
+def worst(scored: list[ScoredCVE], possible: bool = False) -> str | None:
+    """The most serious level among a service's sure CVEs, or among its possible ones."""
+    levels = (s.level for s in scored if s.open_ended == possible)
+    return min(levels, key=LEVELS.index, default=None)
 
 
 def _worst_first(s: ScoredCVE) -> tuple:
-    return LEVELS.index(s.level), -s.riskier_than, s.cve_id
+    return s.open_ended, LEVELS.index(s.level), -s.riskier_than, s.cve_id
 
 
 _NO_NEWS = ("an issue was discovered in", "a vulnerability was found in")
@@ -205,7 +211,7 @@ class Scorer:
         self.con.close()
 
     def score_services(self, services: list[Service]) -> list[list[ScoredCVE]]:
-        """Each service's CVEs, scored and worst first.
+        """Each service's CVEs, scored: the sure ones worst first, then the possible ones.
 
         A CVE found on several ports is scored once: only whether it surely applies
         and which release fixes it differ from port to port.
@@ -218,7 +224,7 @@ class Scorer:
                 (
                     replace(
                         scored[m.cve_id], certain=m.certain, fixed_in=m.fixed_in,
-                        last_affected=m.last_affected,
+                        last_affected=m.last_affected, open_ended=m.open_ended,
                     )
                     for m in matches
                     if m.cve_id in scored
@@ -232,7 +238,7 @@ class Scorer:
         return bisect.bisect_left(self.spread, score) / (len(self.spread) - 1)
 
     def score(self, matches: list[Match]) -> list[ScoredCVE]:
-        """Score and explain matched CVEs, worst first."""
+        """Score and explain matched CVEs: the sure ones worst first, then the possible."""
         if not matches:
             return []
         found = {m.cve_id: m for m in matches}
@@ -290,6 +296,7 @@ class Scorer:
                     summary=_summary(item.description),
                     reasons=reasons,
                     rule=REMOTE_EXPLOIT_RULE if raised else None,
+                    open_ended=match.open_ended,
                 )
             )
         return sorted(results, key=_worst_first)

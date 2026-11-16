@@ -13,6 +13,13 @@ Two NVD habits need care:
 Sometimes the scanner can only narrow a version down to a few releases: PostgreSQL
 says "8.3" and "one of 8.3.0-8.3.7". Then every release is checked, and a CVE that
 affects only some of them is marked as not certain.
+
+NVD also writes ranges with no first affected release: "every version before
+4.10.18". That is how Samba 3.0.20, from 2005, matches Zerologon (CVE-2020-1472), a
+2020 bug in domain controllers. NVD may be right about an old release or may never
+have looked, and the record alone can't tell. So a CVE that matches only through
+such a range is marked open-ended, and reports show it as possible, apart from the
+CVEs whose records name the scanned release or a range that starts somewhere.
 """
 
 from __future__ import annotations
@@ -54,6 +61,8 @@ class Match:
     certain: bool  # False: only some of the releases the service could be are affected
     fixed_in: str | None  # the first release NVD lists as no longer affected, if it says
     last_affected: str | None = None  # or else the last release NVD lists as affected
+    # True: it only matched ranges with no first affected release ("before 4.10.18")
+    open_ended: bool = False
 
 
 def _patch_of(version: str, release: str) -> bool:
@@ -77,6 +86,12 @@ def _affects(cpe: str, limits: tuple, version: str) -> bool:
     return compare(version, listed) == 0 or _patch_of(version, listed)
 
 
+def _names_a_start(cpe: str, limits: tuple) -> bool:
+    """Whether a CPE match row says where the bug begins: one exact release, or a
+    range with a first affected release. "Before 4.10.18" and "every version" don't."""
+    return _CPE_SPLIT.split(cpe)[5] != "*" or bool(limits[0] or limits[1])
+
+
 def match_versions(
     con: sqlite3.Connection, vendor: str, product: str, versions: list[str]
 ) -> list[Match]:
@@ -84,6 +99,7 @@ def match_versions(
     if not versions:
         return []
     affected: dict[str, set[str]] = {}
+    started: set[str] = set()  # CVEs with a matching row that names where the bug begins
     fixes: dict[str, list[str]] = {}
     lasts: dict[str, list[str]] = {}
     rows = con.execute(
@@ -100,6 +116,8 @@ def match_versions(
         if not hit:
             continue
         affected.setdefault(cve_id, set()).update(hit)
+        if _names_a_start(cpe, tuple(limits)):
+            started.add(cve_id)
         if limits[3]:  # versionEndExcluding: the first release without the bug
             fixes.setdefault(cve_id, []).append(limits[3])
         if limits[2]:  # versionEndIncluding: the last release with it
@@ -110,6 +128,7 @@ def match_versions(
             certain=len(hit) == len(set(versions)),
             fixed_in=min(fixes[cve_id], key=sort_key) if cve_id in fixes else None,
             last_affected=min(lasts[cve_id], key=sort_key) if cve_id in lasts else None,
+            open_ended=cve_id not in started,
         )
         for cve_id, hit in sorted(affected.items())
     ]
@@ -163,6 +182,7 @@ def match_service(con: sqlite3.Connection, svc: Service) -> list[Match]:
                         old.certain or match.certain,
                         _lowest(old.fixed_in, match.fixed_in),
                         _lowest(old.last_affected, match.last_affected),
+                        old.open_ended and match.open_ended,
                     )
                 merged[match.cve_id] = match
     return sorted(merged.values(), key=lambda m: m.cve_id)

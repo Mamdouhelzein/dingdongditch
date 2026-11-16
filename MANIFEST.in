@@ -1,5 +1,6 @@
 # The source archive carries the whole test suite, helpers and fixtures included,
 # so `pytest` works from it too.
 graft tests
+include data/lab_truth.json
 global-exclude *.py[co]
 prune tests/__pycache__

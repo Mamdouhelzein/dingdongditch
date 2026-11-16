@@ -2,6 +2,29 @@
 
 What changed in each release of DingDongDitch, newest first.
 
+## Unreleased
+
+### Matching
+- A CVE that only matches a range with no first affected release ("every version before 4.10.18") is now a possible match, shown apart from the sure ones. A port's level comes from its sure CVEs only. This is what made Samba 3.0.20 `KNOWN EXPLOITED` through Zerologon (CVE-2020-1472) in 0.1.0.
+- The Risk column shows the sure CVEs' worst level and count, then how many possible ones there are and their worst level. Below the table, each port's worst possible CVE is listed after its sure ones.
+- `--json`: each CVE has `open_ended`, and `risk` has `possible_level` next to `level`. `level` no longer counts possible matches.
+- `python -m dingdongditch.lab_check data/lab_truth.json` checks the matcher against an answer key of lab services and the CVEs known to affect them: how many it calls sure, calls possible or misses.
+
+### Testing the model
+- `train --test` prints a 95% interval for every number, from 2,000 bootstrap redraws of the listed CVEs.
+- It compares the model with EPSS on the same listed CVEs: the gap with its interval, the CVEs only one of them caught, and a sign test.
+- It repeats the test without every CVE whose description says it was exploited, since NVD may have added that after the attack.
+- `--test` can be given more than once. Days a year or more apart are also added up into one table.
+- `train --test ... --tune` chooses the settings for each test day on the year before it, so the choice of model is part of the test and not made after it.
+
+### Docs
+- The README says what the results do and don't show, and answers "why not just use nmap?".
+- New: a model card (`docs/MODEL.md`) and how the pieces fit together (`docs/HOW_IT_WORKS.md`).
+- Removed the empty `notebooks/`, `models/` and `data/` placeholder folders.
+
+### Still to do
+- The four-year test with intervals, a new demo capture, and lab tests on Vulhub.
+
 ## 0.1.0
 
 The first release. It's alpha: it works on the lab machines it was tested on, and the output may still change.

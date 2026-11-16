@@ -29,6 +29,13 @@ ROWS = [
     ("CVE-PG-OLD", cpe("postgresql", "postgresql", "8.2.4"), None, None, None, None),
     ("CVE-FTP-BACKDOOR", cpe("vsftpd_project", "vsftpd", "2.3.4"), None, None, None, None),
     ("CVE-FTP-OLD", cpe("beasts", "vsftpd"), None, None, "2.3.4", None),
+    # Zerologon's shape: "before 4.10.18" with no start, then two newer branches.
+    ("CVE-ZERO", cpe("samba", "samba"), None, None, None, "4.10.18"),
+    ("CVE-ZERO", cpe("samba", "samba"), "4.11.0", None, None, "4.11.13"),
+    ("CVE-ZERO", cpe("samba", "samba"), "4.12.0", None, None, "4.12.7"),
+    # Filed twice: once exactly, once open-ended under another vendor name.
+    ("CVE-FTP-BOTH", cpe("vsftpd_project", "vsftpd", "2.3.4"), None, None, None, None),
+    ("CVE-FTP-BOTH", cpe("beasts", "vsftpd"), None, None, None, "3.0"),
 ]
 
 
@@ -58,10 +65,36 @@ def ids(matches):
 
 def test_exact_versions_and_ranges(con):
     found = matcher.match_versions(con, "samba", "samba", ["3.0.20"])
-    assert ids(found) == ["CVE-ANY", "CVE-EXACT", "CVE-RANGE"]
+    assert ids(found) == ["CVE-ANY", "CVE-EXACT", "CVE-RANGE", "CVE-ZERO"]
     assert all(m.certain for m in found)
     fixes = {m.cve_id: m.fixed_in for m in found}
-    assert fixes == {"CVE-ANY": None, "CVE-EXACT": None, "CVE-RANGE": "3.0.25"}
+    assert fixes == {
+        "CVE-ANY": None, "CVE-EXACT": None, "CVE-RANGE": "3.0.25", "CVE-ZERO": "4.10.18",
+    }
+
+
+def test_a_range_with_no_first_release_is_only_a_possible_match(con):
+    # Samba 3.0.20 against "before 4.10.18": NVD doesn't say where the bug began.
+    old = {m.cve_id: m for m in matcher.match_versions(con, "samba", "samba", ["3.0.20"])}
+    assert old["CVE-ZERO"].open_ended
+    assert old["CVE-ANY"].open_ended  # "every version" names no start either
+    assert not old["CVE-EXACT"].open_ended  # NVD names 3.0.20 itself
+    assert not old["CVE-RANGE"].open_ended  # from 3.0.0
+    # 4.11.5 is inside a branch that starts at 4.11.0, so there it is a sure match.
+    [newer] = [m for m in matcher.match_versions(con, "samba", "samba", ["4.11.5"])
+               if m.cve_id == "CVE-ZERO"]
+    assert (newer.open_ended, newer.fixed_in) == (False, "4.11.13")
+    # An end-including limit with no start is open-ended too.
+    [ssh] = matcher.match_versions(con, "openbsd", "openssh", ["4.3"])
+    assert ssh.open_ended
+
+
+def test_one_sure_row_makes_the_whole_match_sure(con):
+    svc = Service("h", 21, "tcp", "open", product="vsftpd", version="2.3.4",
+                  cpes=["cpe:/a:vsftpd:vsftpd:2.3.4"])
+    found = {m.cve_id: m for m in matcher.match_service(con, svc)}
+    assert not found["CVE-FTP-BOTH"].open_ended  # exact under one name, open under another
+    assert found["CVE-FTP-OLD"].open_ended
 
 
 def test_update_field_is_part_of_the_version(con):
@@ -131,7 +164,8 @@ def test_postgres_branch_becomes_its_possible_releases():
 def test_match_service_end_to_end(con):
     svc = Service("h", 445, "tcp", "open", "microsoft-ds", "Samba smbd", "3.0.20",
                   cpes=["cpe:/a:samba:samba:3.0.20"])
-    assert ids(matcher.match_service(con, svc)) == ["CVE-ANY", "CVE-EXACT", "CVE-RANGE"]
+    found = ids(matcher.match_service(con, svc))
+    assert found == ["CVE-ANY", "CVE-EXACT", "CVE-RANGE", "CVE-ZERO"]
     svc.cpes = []
     assert matcher.match_service(con, svc) == []
 
@@ -151,5 +185,5 @@ def test_other_vendor_names_for_the_same_product(con):
     svc = Service("h", 21, "tcp", "open", product="vsftpd", version="2.3.4",
                   cpes=["cpe:/a:vsftpd:vsftpd:2.3.4"])
     found = matcher.match_service(con, svc)
-    assert ids(found) == ["CVE-FTP-BACKDOOR", "CVE-FTP-OLD"]
-    assert found[1].last_affected == "2.3.4"
+    assert ids(found) == ["CVE-FTP-BACKDOOR", "CVE-FTP-BOTH", "CVE-FTP-OLD"]
+    assert found[2].last_affected == "2.3.4"

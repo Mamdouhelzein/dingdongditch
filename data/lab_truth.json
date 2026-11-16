@@ -1,0 +1,48 @@
+{
+  "about": "Lab services and the CVEs known to affect their exact release, for `python -m dingdongditch.lab_check`. 'affected' lists CVEs the matcher must report as sure matches. 'not_sure' lists CVEs the matcher may report as possible but never as sure, because nothing establishes them for this release. Add an entry for every lab you scan: a Vulhub folder is already a product, a version and a CVE.",
+  "services": [
+    {
+      "lab": "Metasploitable 2",
+      "product": "vsftpd 2.3.4",
+      "cpe": "cpe:/a:vsftpd_project:vsftpd:2.3.4",
+      "affected": {
+        "CVE-2011-2523": "The backdoored 2.3.4 download itself. https://nvd.nist.gov/vuln/detail/CVE-2011-2523"
+      }
+    },
+    {
+      "lab": "Metasploitable 2",
+      "product": "Samba smbd 3.0.20",
+      "cpe": "cpe:/a:samba:samba:3.0.20",
+      "affected": {
+        "CVE-2007-2447": "usermap_script command injection, Samba 3.0.0 to 3.0.25rc3. https://nvd.nist.gov/vuln/detail/CVE-2007-2447"
+      },
+      "not_sure": {
+        "CVE-2020-1472": "Zerologon. NVD lists every Samba before 4.10.18 with no first release, and Samba's advisory is about domain controllers. https://nvd.nist.gov/vuln/detail/CVE-2020-1472"
+      }
+    },
+    {
+      "lab": "Metasploitable 2",
+      "product": "UnrealIRCd 3.2.8.1",
+      "cpe": "cpe:/a:unrealircd:unrealircd:3.2.8.1",
+      "affected": {
+        "CVE-2010-2075": "The backdoored 3.2.8.1 download itself. https://nvd.nist.gov/vuln/detail/CVE-2010-2075"
+      }
+    },
+    {
+      "lab": "Metasploitable 2",
+      "product": "ISC BIND 9.4.2",
+      "cpe": "cpe:/a:isc:bind:9.4.2",
+      "affected": {
+        "CVE-2008-1447": "DNS cache poisoning (Kaminsky), fixed in 9.4.2-P1. https://nvd.nist.gov/vuln/detail/CVE-2008-1447"
+      }
+    },
+    {
+      "lab": "Metasploitable 2",
+      "product": "Apache httpd 2.2.8",
+      "cpe": "cpe:/a:apache:http_server:2.2.8",
+      "affected": {
+        "CVE-2011-3192": "Range header denial of service, 2.2.x before 2.2.20. https://nvd.nist.gov/vuln/detail/CVE-2011-3192"
+      }
+    }
+  ]
+}

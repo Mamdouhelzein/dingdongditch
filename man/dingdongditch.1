@@ -1,4 +1,4 @@
-.TH DINGDONGDITCH 1 2026-11-08 "DingDongDitch 0.1.0" "User Commands"
+.TH DINGDONGDITCH 1 2026-11-16 "DingDongDitch 0.1.0" "User Commands"
 .SH NAME
 dingdongditch \- find open ports on hosts you own, and work out what is behind them
 .SH SYNOPSIS
@@ -28,7 +28,8 @@ dingdongditch \- find open ports on hosts you own, and work out what is behind t
 .IR file ]
 .RB [ \-\-xgboost ]
 .RB [ \-\-test
-.IR YYYY-MM-DD ]
+.IR YYYY-MM-DD " ...]"
+.RB [ \-\-tune ]
 .br
 .B dingdongditch
 .RB [ \-V | \-\-version ]
@@ -196,8 +197,23 @@ or
 Save nothing.
 Train on only what was known on that day, then print how well the model, CVSS,
 public exploits and EPSS from that day found the CVEs CISA listed in the
-following year.
+following year, each with a 95% interval.
 The year must be over.
+Can be given more than once.
+Days a year or more apart are also added up into one table.
+See
+.BR "RISK MODEL" .
+.TP
+.B \-\-tune
+With
+.BR \-\-test :
+choose the model's settings again for each test day, on the year before it,
+instead of using the built-in ones.
+With
+.BR \-\-xgboost ,
+XGBoost is tried as well as logistic regression.
+Much slower: it trains eight models for each test day, and four more with
+XGBoost at 4 to 10 minutes each.
 .SS General options
 .TP
 .BR \-V ", " \-\-version
@@ -331,9 +347,13 @@ and
 is null when there is no database or model.
 Otherwise it has the port's worst
 .B level
-(null if no CVE was found) and
+among its sure CVEs (null if there is none),
+.BR possible_level ,
+the worst level among its possible ones (see
+.BR "RISK LEVELS" ),
+and
 .BR cves ,
-every CVE found, worst first.
+every CVE found: the sure ones worst first, then the possible ones.
 Each has
 .BR cve_id ,
 .BR level ,
@@ -346,10 +366,11 @@ Each has
 .BR cvss ,
 .BR epss ,
 .BR summary ,
-.B reasons
-and
+.BR reasons ,
 .B rule
-(set when a rule, not the model, raised the level).
+(set when a rule, not the model, raised the level) and
+.B open_ended
+(true for a possible match).
 .SH MISSING PORTS
 Going too fast can make open ports look closed, especially inside a virtual
 machine or over a slow link.
@@ -428,10 +449,27 @@ that day) each rank every CVE that was public and not yet on CISA's list, and
 the report shows how many of the CVEs CISA listed in the following year each
 would have caught by fixing the top 1%, 5% or 10% of its ranking.
 .PP
-The settings in use were chosen the same way, on the year before May 2025.
+A test year has few listed CVEs, 91 and 53 in the first two tests, so every
+number comes with a 95% interval, from redrawing the listed CVEs 2,000 times.
+The model is then compared with EPSS on the same listed CVEs: the gap between
+them with its interval, how many CVEs only one of the two caught, and a sign
+test on those.
+The model is called ahead beyond chance only where the interval stays above 0
+and the sign test's p-value is under 0.05.
+.PP
+A giveaway check follows.
+NVD keeps no history, so a description read today may say "exploited in the
+wild" because someone added it after the attack.
+The test is repeated without every CVE whose description says so.
+.PP
+The built-in settings were chosen on the year before May 2025.
 Logistic regression is the default because it tied with XGBoost on the years
 it wasn't chosen on, trains ten times faster, and shows plainly which clues
 raised a score.
+That choice was made after seeing those test years.
+.B \-\-tune
+takes it out of the test: each test day's settings come from the year before
+that day only.
 .SH RISK LEVELS
 After a scan, each service's product and version is looked up in NVD's lists of
 affected products and versions.
@@ -453,7 +491,16 @@ The model ranks it in the top 5%.
 .B LOW
 Everything else.
 .PP
-The Risk column shows each port's worst level and how many CVEs it has, or
+A CVE is a sure match when NVD names the scanned release or a range of releases
+that starts somewhere.
+It is only a possible match when NVD lists every release before the fix and
+never says where the bug began.
+Samba 3.0.20, from 2005, matches CVE-2020-1472 that way, a 2020 bug in domain
+controllers.
+A possible match keeps its level but never sets the port's.
+.PP
+The Risk column shows each port's worst level among its sure CVEs and how many
+there are, then how many possible ones and their worst level, or
 .I no known CVEs
 (NVD lists none for that version),
 .I version unknown
@@ -462,7 +509,8 @@ The Risk column shows each port's worst level and how many CVEs it has, or
 finds more versions), or
 .I no risk data
 (no database or model yet).
-Below the table, each port lists its three worst CVEs with the share of all
+Below the table, each port lists its three worst sure CVEs and its worst
+possible one, with the share of all
 CVEs the model ranks lower ("riskier than"), the CVSS score, today's EPSS, a
 summary, a
 .B Why
@@ -497,7 +545,8 @@ bug that is already fixed.
 .IP \(bu 2
 Some NVD entries name only the first fixed release, with no lower bound, so
 they match every older release too, even when the bug came later.
-Samba 3.0.20 gets CVE-2020-1472 this way.
+Those are shown as possible, apart from the sure matches.
+Some of them are real: an old bug is often filed as just "before" its fix.
 .IP \(bu 2
 NVD files some CVEs about one vendor's package under the product itself, and
 their fixed release can be a package number rather than the product's.
@@ -559,6 +608,9 @@ Train the model on everything known today and save it.
 .TP
 .B dingdongditch train \-\-test 2025\-05\-01
 See how the model would have done from 1 May 2025.
+.TP
+.B dingdongditch train \-\-test 2023\-05\-01 \-\-test 2024\-05\-01 \-\-test 2025\-05\-01 \-\-tune
+Test three years, each with settings chosen on the year before it, and add them up.
 .SH ENVIRONMENT
 .TP
 .B DINGDONGDITCH_DB

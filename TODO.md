@@ -28,5 +28,15 @@ Tick a box (`[x]`) when a step is done and committed.
 - [x] 17. Update README (own scanner is default, nmap is backup) + man page
 - [x] 18. Push to GitHub
 
+## Part 6: evidence
+- [x] 19. Possible matches: ranges with no first affected release never set a port's level
+- [x] 20. `train --test`: 95% intervals, the model against EPSS CVE by CVE, the giveaway check, several years added up, `--tune`
+- [x] 21. Answer key for the matcher (`data/lab_truth.json`) and `python -m dingdongditch.lab_check`
+- [x] 22. README: what is and isn't shown, why not nmap; model card
+- [ ] 23. Run `update-db --epss-date` for 1 May of 2022 to 2025, then `train --test` on those four days with `--tune`, and put the table in the README and model card
+- [ ] 24. Scan Metasploitable 2 again and record a new demo GIF
+- [ ] 25. Run `lab_check`, then add each Vulhub lab scanned in step 16 to the answer key
+- [ ] 26. Try the Redis and MongoDB checks against real servers
+
 ## Later bonus
 - [ ] SYN scan (needs root)

@@ -8,73 +8,21 @@
 ![python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
-A port scanner written from scratch in Python. It finds open TCP ports, works out which service and version is behind each one, and proves common misconfigurations without exploiting anything.
+A port scanner written from scratch in Python. It finds open TCP ports, works out which service and version is behind each one, proves common misconfigurations without exploiting anything, and ranks each service's CVEs with a model trained on which CVEs attackers really used.
 
-**Status:** the scanner works, `update-db` downloads the vulnerability data and trains a model that predicts which CVEs attackers will use next better than CVSS and EPSS did ([results](#how-good-is-the-model)), and every scan lists each port's CVEs, worst first, with [why and how to fix them](#risk-levels).
+## What is shown, and what isn't yet
+
+| | Result | How far to trust it |
+|---|---|---|
+| The model | In two time-travel tests, fixing the top 10% of its ranking caught 77% and 74% of the CVEs attackers used next. EPSS caught 38% and 58% ([results](#how-good-is-the-model)) | The top-10% lead in the 2023 test is too big to be luck. The top-1% leads are 4 and 5 CVEs, which luck can explain. Two test years so far |
+| The scanner | On Metasploitable 2 a default scan found 24 open ports where nmap's found 23, and it names the same versions as nmap for BIND, PostgreSQL, Samba and UnrealIRCd ([details](#how-good-is-the-scanner)) | One lab machine. nmap knows far more services |
+| CVE matching | Every service with a version gets its CVEs, split into sure and [possible](#sure-and-possible-matches) matches | Five known CVEs are in the [answer key](#how-good-is-the-matching) so far, so its precision isn't measured yet |
 
 ![A Karen-mode scan of a Metasploitable 2 lab VM: three open ports, two confirmed problems and the worst CVEs for each service](https://raw.githubusercontent.com/Mamdouhelzein/dingdongditch/main/docs/demo.gif)
 
-<sub>A real scan of a lab VM, with the waiting sped up: it took about 50 seconds. The same output as text is just below.</sub>
+<sub>A real scan of a lab VM with release 0.1.0, with the waiting sped up: it took about 50 seconds.</sub>
 
-## What it looks like
-
-A real scan of a Metasploitable 2 lab VM:
-
-```
-$ dingdongditch scan 192.168.195.130 -p 21,139,1524 --karen-mode
-
-                                 Open services
-┌─────────────────┬──────────┬───────────┬───────────────────┬─────────────────┐
-│ Host            │ Port     │ Service   │ Product / version │ Risk            │
-├─────────────────┼──────────┼───────────┼───────────────────┼─────────────────┤
-│ 192.168.195.130 │ 21/tcp   │ ftp       │ vsftpd 2.3.4      │ CONFIRMED       │
-│                 │          │           │                   │ HIGH            │
-│                 │          │           │                   │ 3 CVEs          │
-│ 192.168.195.130 │ 139/tcp  │ smb       │ Samba smbd 3.0.20 │ KNOWN EXPLOITED │
-│                 │          │           │                   │ 64 CVEs         │
-│ 192.168.195.130 │ 1524/tcp │ bindshell │ bindshell         │ CONFIRMED       │
-│                 │          │           │                   │ version unknown │
-└─────────────────┴──────────┴───────────┴───────────────────┴─────────────────┘
-OS guess for 192.168.195.130: Debian
-  from port 139 (smb): Debian
-CONFIRMED 192.168.195.130:21 Anonymous FTP login allowed
-  Why: Anyone can log in to this FTP server without an account.
-  Fix: Disable anonymous access, e.g. anonymous_enable=NO in vsftpd.conf.
-CONFIRMED 192.168.195.130:1524 Open shell with no login
-  Why: Anyone who connects gets a command prompt on this machine with no password. This is usually a backdoor.
-  Fix: Find and stop whatever is listening on this port, and treat the machine as compromised until you know how it
-got there.
-HIGH 192.168.195.130:21 vsftpd 2.3.4: 3 known CVEs (1 HIGH, 2 LOW)
-  CVE-2011-2523 HIGH (riskier than 99.8% of CVEs, CVSS 9.8, EPSS 96.2%)
-    vsftpd 2.3.4 downloaded between 20110630 and 20110703 contains a backdoor which opens a shell on port 6200/...
-    Why: no user action needed; public exploit on Exploit-DB; OS command injection (CWE-78)
-    Fix: NVD lists no fixed release: check the vendor's advisories
-  CVE-2021-3618 LOW (riskier than 82.5% of CVEs, CVSS 7.4, EPSS 2.0%)
-    ALPACA is an application layer protocol content confusion attack, exploiting TLS servers implementing diffe...
-    Why: no user action needed; affects debian_linux (debian); affects fedora (fedoraproject)
-    Fix: upgrade to 3.0.4 or later
-  CVE-2015-1419 LOW (riskier than 10.6% of CVEs, CVSS 5.0, EPSS 6.8%)
-    Unspecified vulnerability in vsftpd 3.0.2 and earlier allows remote attackers to bypass access restrictions...
-    Why: affects opensuse (opensuse); public for a long time; description says "bypass"
-    Fix: upgrade to a release newer than 3.0.2
-KNOWN EXPLOITED 192.168.195.130:139 Samba smbd 3.0.20: 64 known CVEs (1 KNOWN EXPLOITED, 7 HIGH, 5 MEDIUM, 51 LOW)
-  CVE-2020-1472 KNOWN EXPLOITED (riskier than 100.0% of CVEs, CVSS 5.5, EPSS 99.4%)
-    An elevation of privilege vulnerability exists when an attacker establishes a vulnerable Netlogon secure ch...
-    Why: on CISA's list of CVEs used in real attacks; no user action needed; affects microsoft products; remote
-    exploit on Exploit-DB
-    Fix: upgrade to 4.10.18 or later
-  CVE-2021-44142 HIGH (riskier than 99.2% of CVEs, CVSS 8.8, EPSS 73.6%)
-    The Samba vfs_fruit module uses extended file attributes (EA, xattr) to provide "...enhanced compatibility...
-    Why: no user action needed; affects enterprise_linux_for_power_big_endian (redhat); high CVSS score
-    Fix: upgrade to 4.13.17 or later
-  CVE-2020-25717 HIGH (riskier than 99.1% of CVEs, CVSS 8.1, EPSS 1.6%)
-    A flaw was found in the way Samba maps domain users to local users
-    Why: no user action needed; affects enterprise_linux_for_power_big_endian (redhat); affects debian_linux (debian)
-    Fix: upgrade to 4.13.14 or later
-  ...and 61 more: --json lists them all.
-CVEs are matched on the version number alone. Linux distributions often patch a bug without changing it, so check the
-installed package too.
-```
+> **This capture is from release 0.1.0, and its Samba row overstates.** `KNOWN EXPLOITED` comes from Zerologon (CVE-2020-1472), a 2020 bug in domain controllers. NVD lists it for every Samba before 4.10.18 and never says where it began, so Samba 3.0.20 from 2005 matches. The code on `main` now shows a match like that as [possible](#sure-and-possible-matches), and the row's level comes from its sure CVEs. A new capture will replace this one.
 
 ## Install
 
@@ -106,7 +54,7 @@ pipx inject dingdongditch xgboost
 
 nmap is optional too. You only need it for `--engine nmap`.
 
-To try the newest code from GitHub instead of the last release:
+Possible matches and the new `train --test` output are on `main` and not in a release yet. To try the newest code from GitHub instead of the last release:
 
 ```bash
 pipx install git+https://github.com/Mamdouhelzein/dingdongditch.git
@@ -181,11 +129,12 @@ dingdongditch train                                 # about 2 minutes, saves mod
 dingdongditch train --xgboost                       # XGBoost instead: about 15 minutes, about as good
 dingdongditch train --model ~/lab/model.joblib      # save it somewhere else
 dingdongditch train --test 2025-05-01               # how it would have done from that day
+dingdongditch train --test 2025-05-01 --tune        # the same, with settings chosen on the year before
 ```
 
 `--xgboost` needs XGBoost, which isn't installed by default: add it with `pipx inject dingdongditch xgboost`.
 
-`--test` is a fair time-travel test: it trains on only what was known that day, then checks how many of the CVEs CISA listed in the following year the model, CVSS and EPSS (as it was that day) would each have caught by fixing the top of their rankings. It saves nothing.
+`--test` is a time-travel test: it trains on only what was known that day, then checks how many of the CVEs CISA listed in the following year the model, CVSS and EPSS (as it was that day) would each have caught by fixing the top of their rankings. It saves nothing. Give it several days a year apart and it adds them up. [How good is the model?](#how-good-is-the-model) has the results.
 
 ## Risk levels
 
@@ -198,13 +147,19 @@ After a scan, each service's product and version is looked up in NVD's lists of 
 | `MEDIUM` | The model ranks it in the top 5% |
 | `LOW` | Everything else |
 
-The Risk column shows each port's worst level and how many CVEs it has. Below the table, each port lists its three worst CVEs:
+Below the table, each port lists its three worst sure CVEs:
 
 - **riskier than X%:** the share of all CVEs the model ranks lower. Next to it are the CVSS score and today's EPSS, for reference.
 - **Why:** the clues that raised the model's score most, such as "no login needed", "public exploit on Exploit-DB" or a weakness type.
 - **Fix:** the first release NVD lists as fixed, or else the last one it lists as affected. Some CVEs have neither.
 
-**The remote-exploit rule.** The model learns from CISA's list, which tracks current attack campaigns and rarely includes old CVEs (see [What to keep in mind](#how-good-is-the-model)). On its own it ranks Samba's 2007 `usermap_script` bug low, even though anyone can run that exploit against a server that was never patched. So a CVE with a public remote exploit on Exploit-DB is always at least `HIGH`, and its Why line says the rule raised it. The rule only ever raises a level.
+### Sure and possible matches
+
+A CVE is a **sure** match when NVD names the scanned release, or a range of releases that starts somewhere ("from 3.0.0 up to 3.0.25"). It is only a **possible** match when NVD lists every release before the fix and never says where the bug began ("before 4.10.18"). Some of those are real, because an old bug is often filed that way. Some are doubtful: Samba 3.0.20, from 2005, matches Zerologon, a 2020 bug in domain controllers, like this.
+
+So a port's level comes from its sure CVEs only. The Risk column then adds how many possible ones there are and their worst level, and below the table the worst possible CVE is shown apart, marked as possible. With `--json`, each CVE has `open_ended` (true for a possible match), and the port has `level` and `possible_level`.
+
+**The remote-exploit rule.** The model learns from CISA's list, which tracks current attack campaigns and rarely includes old CVEs. On its own it ranks Samba's 2007 `usermap_script` bug low, even though anyone can run that exploit against a server that was never patched. So a CVE with a public remote exploit on Exploit-DB is always at least `HIGH`, and its Why line says the rule raised it. The rule only ever raises a level.
 
 The Risk column can also say:
 
@@ -214,12 +169,9 @@ The Risk column can also say:
 | `version unknown` | The scan found no version, so there was nothing to look up. `--karen-mode` finds more, such as Samba, UnrealIRCd and Tomcat |
 | `no risk data` | There's no database or model yet: run `dingdongditch update-db` |
 
-With `--json`, each service gets a `risk` entry with its worst `level` and every CVE in `cves`: its level, `riskier_than` (0 to 1), whether it surely applies (`certain`), `fixed_in`, `last_affected`, CVSS, EPSS, a summary, the reasons, and the `rule` if one raised it.
+**Limits of matching**
 
-**Limits**
-
-- Matching uses the version number alone. Linux distributions often fix a bug without changing it, so check the installed package before you trust a match.
-- Some NVD entries say "before 4.10.18" with no lower bound. That matches every older release too, even when the bug came later: Samba 3.0.20 gets Zerologon (CVE-2020-1472) this way.
+- It uses the version number alone. Linux distributions often fix a bug without changing it, so check the installed package before you trust a match.
 - NVD files some CVEs about one vendor's package, such as a SUSE init script or the Windows installer for PostgreSQL, under the product itself, and their fix can be a package number like `9.4-0.5.3.1`.
 - When the scan narrows a version down to a few releases, like PostgreSQL's "one of 8.3.0-8.3.7", a CVE that affects only some of them says "only some of the versions it could be".
 
@@ -249,44 +201,52 @@ These checks do the smallest exchange that proves the problem, then leave. They 
 | `mongodb-no-auth` | MongoDB has no login | Asks for databases matching a made-up name, so no real names come back |
 | `telnet-open` | Telnet is running | Reads its greeting and doesn't log in |
 
-## How it works
+## Why not just use nmap?
 
-```
-your targets  →  find open ports  →  ask each port what it is  →  match the answer to a product
-              →  (Karen mode) web pages, certificates, OS guess, safe checks
-              →  look up its CVEs  →  score and explain each one  →  report
-```
+For finding ports and naming services, nmap is the better tool: it has thousands of probes, and this scanner knows about 25 services. `--engine nmap` runs it for you, and `analyze` reads a report you already have.
 
-1. **Port finder:** an async TCP connect scan with a worker pool. Ports that time out get a second, slower try, and it slows down by itself if the system runs out of sockets.
-2. **Banner grabbing:** listens first, because many services speak first, then sends one harmless message. Ports that say nothing are asked once more a moment later, because a small machine can still be busy with the port scan. It tries TLS if plain text fails, and reads at most 4 KB. Services that only answer in their own protocol get one read-only question in it: DNS servers are asked their `version.bind`, and PostgreSQL gets a startup message for a protocol version that doesn't exist. It refuses before any login, and its error message shows which releases it could be.
-3. **Fingerprints:** regex rules turn a banner into a product, version and CPE name.
-4. **CVE matching:** the CPE's product and version are compared with NVD's affected versions and ranges. A patch like OpenSSH's `4.7p1` counts as `4.7`, and products NVD files under more than one vendor name (vsftpd, MySQL, ProFTPD, UnrealIRCd) are looked up under all of them.
-5. **Scoring:** the model scores each CVE, and its biggest clues become the Why line.
+The built-in scanner is there for three reasons:
 
-## How good is it?
+- **Nothing else to install.** `pipx install dingdongditch` gives a working scan on a machine without nmap.
+- **The `CONFIRMED` checks and Karen mode are built on it.** They need the conversation with each port, not just its name: the FTP login, the Redis reply, the IRC and SMB hellos.
+- **I wrote it to learn how scanning works.** Connect scans, banner grabbing, protocol probes and version fingerprints are all here to read, in about 2,000 lines of Python.
 
-Tested against a real Metasploitable 2:
+What nmap doesn't do is the part after the scan. A service with 64 CVEs is a list, not an answer. Ranking those CVEs by how likely attackers are to use them, and checking that ranking against what happened next, is what this project is about.
+
+## How good is the scanner?
+
+Tested against a real Metasploitable 2, and only that so far:
 
 - A default scan found 24 open ports, and nmap's default top 1000 ports found 23. The two tools use different port lists.
 - A full Karen mode scan from Kali found 30 open ports.
 - Like nmap, it names BIND 9.4.2 and PostgreSQL 8.3 (one of 8.3.0 to 8.3.7) in every scan, and Samba 3.0.20 and UnrealIRCd 3.2.8.1 in Karen mode.
-- In Karen mode, every service with a version gets its CVEs. BIND, Apache, Samba and Tomcat are `KNOWN EXPLOITED`; vsftpd, OpenSSH, ProFTPD, MySQL and UnrealIRCd are `HIGH`. The three famous backdoors are all `HIGH`: vsftpd's from the model alone (riskier than 99.8% of CVEs), Samba's `usermap_script` and UnrealIRCd's from the remote-exploit rule.
 
-nmap still knows far more services, with thousands of probes. java-rmi, for example, is only named from its port number here.
+Limits:
 
-Other limits:
-
+- nmap knows far more services. java-rmi, for example, is only named from its port number here.
 - TCP only, so no UDP services yet.
 - It makes full connections, which the target can log.
 - The Redis and MongoDB checks have only been tested against local fake servers so far, not real ones.
 - SMB versions need SMB1, which newer Windows and Samba turn off.
-- Versions are what a service says about itself, and Linux distributions often patch old versions without changing the number.
+- Versions are what a service says about itself.
+
+## How good is the matching?
+
+Not measured yet, and this is how it will be. [`data/lab_truth.json`](https://github.com/Mamdouhelzein/dingdongditch/blob/main/data/lab_truth.json) is an answer key: lab services, and the CVEs known to affect their exact release. This checks the matcher against it:
+
+```bash
+python -m dingdongditch.lab_check data/lab_truth.json
+```
+
+It reports how many of the known CVEs the matcher calls sure, calls only possible, or misses, and how many of its sure matches the key says nothing about. The key starts with five Metasploitable 2 services and their famous CVEs, plus Zerologon as a match that must never be called sure. Every Vulhub lab is a product, a version and a CVE, so each one scanned adds a line.
+
+With release 0.1.0, before sure and possible matches were split, a Karen mode scan of Metasploitable 2 gave every service with a version its CVEs: BIND, Apache, Samba and Tomcat came out `KNOWN EXPLOITED`, and vsftpd, OpenSSH, ProFTPD, MySQL and UnrealIRCd `HIGH`. Some of those levels came from possible matches, so they will be measured again.
 
 ## How good is the model?
 
-The question: out of every CVE that is public today and not yet known to be exploited, which ones will attackers use next? The test goes back to a past day, ranks every such CVE using only what was known then, and checks which CVEs CISA added to its exploited list in the following year. A good ranking puts them near the top, so fixing its first few percent catches most of them.
+The question: out of every CVE that is public today and not yet known to be exploited, which ones will attackers use next? The test goes back to a past day, ranks every such CVE using only what was known then, and checks which CVEs CISA added to its exploited list in the following year.
 
-These are the results of `dingdongditch train --test`. "Top 1%" means: of the CVEs CISA listed that year, the share you'd have caught by fixing the top 1% of the ranking. Random guessing catches about 1%, 5% and 10%.
+"Top 1%" means: of the CVEs CISA listed that year, the share you'd have caught by fixing the top 1% of the ranking. Random guessing catches about 1%, 5% and 10%. The numbers in brackets are CVEs caught.
 
 **From 1 May 2025:** 275,380 CVEs ranked, 91 of them listed by CISA in the next year.
 
@@ -294,8 +254,8 @@ These are the results of `dingdongditch train --test`. "Top 1%" means: of the CV
 |---|---|---|---|---|
 | CVSS | 1.6% | 14.6% | 31.1% | 0.0008 |
 | Has a public exploit | 2.0% | 10.0% | 18.7% | 0.0004 |
-| EPSS as it was that day | 27.5% | 52.7% | 58.2% | 0.0332 |
-| **DingDongDitch** | **31.9%** | **54.9%** | **73.6%** | **0.0597** |
+| EPSS as it was that day | 27.5% (25) | 52.7% (48) | 58.2% (53) | 0.0332 |
+| **DingDongDitch** | **31.9% (29)** | **54.9% (50)** | **73.6% (67)** | **0.0597** |
 
 **From 1 May 2023:** 200,343 CVEs ranked, 53 of them listed by CISA in the next year.
 
@@ -303,75 +263,38 @@ These are the results of `dingdongditch train --test`. "Top 1%" means: of the CV
 |---|---|---|---|---|
 | CVSS | 0.0% | 9.9% | 33.4% | 0.0007 |
 | Has a public exploit | 2.5% | 12.6% | 25.3% | 0.0004 |
-| EPSS as it was that day | 24.5% | 32.1% | 37.7% | 0.0122 |
-| **DingDongDitch** | **34.0%** | **54.7%** | **77.4%** | **0.0218** |
+| EPSS as it was that day | 24.5% (13) | 32.1% (17) | 37.7% (20) | 0.0122 |
+| **DingDongDitch** | **34.0% (18)** | **54.7% (29)** | **77.4% (41)** | **0.0218** |
 
-In both years the model beats EPSS and leaves CVSS far behind. Sorting by CVSS barely beats random at the very top, because thousands of CVEs score 9.8 and most are never attacked.
+**What these numbers do and don't show**
 
-What it learned makes sense. Products from Cisco, Ivanti, Microsoft, SonicWall and Citrix raise a score, and so do vendor notes like "exploited in the wild" or "Apple is aware of a report". CVEs NVD hasn't scored yet, and bug types like null-pointer crashes, lower it.
+- **Far better than CVSS: yes.** Sorting by CVSS barely beats random at the top, because thousands of CVEs score 9.8 and most are never attacked.
+- **Better than EPSS in the top 10%: yes for 2023.** 41 against 20 of 53 is more than luck however the two rankings' catches overlap (sign test p under 0.01). For 2025, 67 against 53 of 91 points the same way, and whether it clears that bar depends on the overlap.
+- **Better than EPSS in the top 1%: not shown.** The leads are 4 CVEs and 5 CVEs. Even if those were the only CVEs the two rankings disagreed on, a sign test gives p = 0.125 and p = 0.06.
+- **One known leak.** In the 2025 test, 10 of the 91 listed CVEs say "exploited in the wild" in their description, which NVD may have added after the attack. Without them the model ties EPSS in the top 1% and 5%, and still leads in the top 10% (70.4% against 55.6%).
+- **The default model was picked after seeing both test years.** XGBoost and logistic regression tied across them, and the faster one became the default. That makes these numbers a little flattering.
 
-**How it was kept fair**
+`train --test` now answers the open points itself. It prints a 95% interval for every number, compares the model with EPSS CVE by CVE, repeats the test without the giveaway CVEs, and adds several test years up. `--tune` picks the settings for each test day from the year before it only:
 
-- Everything comes from before the day: the CVEs public by then, CISA's list as it stood, and Exploit-DB exploits published by then. EPSS is the score it gave that day, because today's EPSS already knows what happened next. Using it would roughly double EPSS's numbers.
-- NVD references are left out. Links to news stories and exploits pile up *after* an attack, so they would leak the answer.
-- The model's settings were chosen on a different year (May 2024 to May 2025, from standing on 1 May 2024), not on either test year.
-- Being open about one choice: XGBoost and logistic regression tied across the two test years (XGBoost was a little better from 2025, logistic regression from 2023), and logistic regression became the default after seeing that. It's ten times faster, and each clue's weight can be read straight off it. `train --xgboost` gives the other one.
-- CVSS is one set of clues for every CVE: the v3 score and vector where NVD has them, otherwise v2 translated into v3's terms. NVD only began v3 in 2016, and an earlier version that treated "no v3 score" as a clue learned that old CVEs are safe. The numbers above are from the current version.
+```bash
+dingdongditch update-db --epss-date 2022-05-01 --epss-date 2023-05-01 --epss-date 2024-05-01 --epss-date 2025-05-01
+dingdongditch train --test 2022-05-01 --test 2023-05-01 --test 2024-05-01 --test 2025-05-01 --tune
+```
 
-**What to keep in mind**
-
-- The test sets are small: 91 and 53 CVEs. One or two lucky catches move the top-1% number by a few points.
-- CISA's list only holds exploitation CISA has confirmed, so some CVEs counted as "not exploited" really were. This makes every ranking look a little worse, the same for all of them.
-- NVD keeps no history, so CVSS, descriptions and products are today's copies. They rarely change once a CVE is analysed. In the 2025 test, 10 of the 91 listed CVEs say "exploited in the wild" in their description. All 10 were published before the day, 8 of them in 2008–2013, when NVD descriptions routinely said so. Without them, the model still ties EPSS in the top 1% and 5% and beats it in the top 10% (70.4% against 55.6%).
-- CISA's list rarely includes old CVEs. Of the CVEs from before 2012 that have a public remote exploit, 0.7% are on it, against 16.5% for CVEs since 2018. The model learns that, so it ranks an old CVE low even when it is dangerous on a server that never got patched.
-- No model can rank a CVE before it is public. In the year after 1 May 2025, CISA listed 259 CVEs, and 168 of them were brand new (mostly zero-days). Those aren't in the test.
+That four-year table is the next thing to be published here. How the test is kept fair, what the model learned and where it is weak are in the [model card](https://github.com/Mamdouhelzein/dingdongditch/blob/main/docs/MODEL.md).
 
 ## Roadmap
 
 - [x] **Part 1:** built-in scanner, Karen mode and safe checks
-- [ ] Finish lab testing on Vulhub
 - [x] **Part 2:** collect data from NVD, CISA KEV, Exploit-DB and EPSS (`dingdongditch update-db`)
 - [x] **Part 3:** train a model on which CVEs really got exploited, and compare it with CVSS and EPSS (`dingdongditch train`)
 - [x] **Part 4:** match services to CVEs and show a risk score per port, with why and how to fix it
 - [x] **Part 5:** demo GIF and PyPI release (0.1.0)
+- [x] **Part 6:** sure and possible matches, intervals and a CVE-by-CVE comparison in `train --test`, an answer key for the matcher
+- [ ] Publish the four-year test with intervals, and a new demo capture
+- [ ] Lab testing on Vulhub, adding each lab to the answer key
 
-Why a model? Knowing a service has CVEs is a database lookup. The hard part is prioritizing: an old OpenSSH can have dozens of CVEs, but only a few are ever exploited in the wild.
-
-## Project layout
-
-```
-src/dingdongditch/
-  cli.py           # the `dingdongditch` command
-  targets.py       # IPs, hostnames, subnets → list of IPs
-  ports.py         # port lists and profiles
-  connect_scan.py  # finds open ports
-  probes.py        # banner grabbing
-  fingerprints.py  # banner → product, version, CPE
-  http_info.py     # Karen mode: page title, headers, app
-  tls_info.py      # Karen mode: certificates
-  os_guess.py      # Karen mode: OS guess
-  misconfig.py     # Karen mode: CONFIRMED checks
-  binary_probes.py # DNS and PostgreSQL questions, and reading their answers
-  conversations.py # Karen mode: IRC and SMB hellos that reveal versions
-  mongo_wire.py    # just enough MongoDB protocol for its check
-  own_scanner.py   # runs the steps above in order
-  nmap_scanner.py  # the optional nmap engine
-  nmap_parser.py   # nmap XML → services
-  db.py            # the local vulnerability database (SQLite)
-  collect.py       # downloads CISA KEV, EPSS and the Exploit-DB index
-  nvd.py           # downloads NVD's CVE feeds, one CVE at a time
-  features.py      # CVEs as they were on a date → numbers for the model
-  train.py         # trains, saves and time-travel-tests the model
-  evaluate.py      # top 1% / 5% / 10% and the CVSS and EPSS baselines
-  versions.py      # compares version numbers the way NVD writes them
-  matcher.py       # a scanned service → the CVEs NVD lists for it
-  scorer.py        # levels, "riskier than", why and fix for each CVE
-  data/            # PostgreSQL error line -> release table
-docs/              # the demo GIF
-man/               # the man page
-scripts/           # rebuilds the PostgreSQL table from its source
-tests/             # pytest, using fake local servers
-```
+How the pieces fit together, file by file, is in [docs/HOW_IT_WORKS.md](https://github.com/Mamdouhelzein/dingdongditch/blob/main/docs/HOW_IT_WORKS.md).
 
 ## Development
 

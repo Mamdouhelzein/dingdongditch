@@ -42,7 +42,7 @@ from dingdongditch.connect_scan import (
     DEFAULT_TIMEOUT,
     Recheck,
 )
-from dingdongditch.evaluate import EvaluationError
+from dingdongditch.evaluate import EPSS, EvaluationError, Judged
 from dingdongditch.matcher import targets
 from dingdongditch.nmap_parser import Service, parse_nmap_xml
 from dingdongditch.nmap_scanner import PROFILES, NmapNotFoundError
@@ -76,6 +76,7 @@ def main(
 
 _LEVEL_STYLES = {"KNOWN EXPLOITED": "bold red", "HIGH": "red", "MEDIUM": "yellow", "LOW": ""}
 SHOWN = 3  # CVEs listed under the table for each port; --json has them all
+POSSIBLE = "Possible only: NVD's record doesn't say which release the bug began in"
 
 
 def _risks(services: list[Service], db_path: Path | None) -> list[list[ScoredCVE]] | None:
@@ -108,8 +109,17 @@ def _risk_cell(svc: Service, scored: list[ScoredCVE] | None) -> str:
     if scored is None:
         lines.append("[dim]no risk data[/dim]")
     elif scored:
-        count = f"{len(scored)} CVE" + ("s" if len(scored) > 1 else "")
-        lines += [_level(worst(scored)), f"[dim]{count}[/dim]"]
+        sure = [s for s in scored if not s.open_ended]
+        if sure:
+            count = f"{len(sure)} CVE" + ("s" if len(sure) > 1 else "")
+            lines += [_level(worst(sure)), f"[dim]{count}[/dim]"]
+        if len(sure) < len(scored):
+            # A possible match never sets the port's level, but the worst one is named.
+            # On its own line, so the column stays as narrow as "KNOWN EXPLOITED".
+            lines += [
+                f"[dim]{'+' if sure else ''}{len(scored) - len(sure)} possible:[/dim]",
+                f"[dim]{worst(scored, possible=True)}[/dim]",
+            ]
     elif targets(svc):
         lines.append("[dim]no known CVEs[/dim]")
     else:
@@ -122,14 +132,39 @@ def _indented(spaces: int, markup: str) -> None:
     console.print(Padding(markup, (0, 0, 0, spaces), expand=False))
 
 
-def _print_cves(svc: Service, scored: list[ScoredCVE]) -> None:
+def _count(scored: list[ScoredCVE], word: str) -> str:
+    """'12 known CVEs (8 KNOWN EXPLOITED, 4 LOW)'"""
     counts = Counter(s.level for s in scored)
     split = ", ".join(f"{counts[level]} {level}" for level in LEVELS if counts[level])
-    console.print(
-        f"{_level(worst(scored))} {escape(svc.host)}:{svc.port} {escape(svc.label)}: "
-        f"{len(scored)} known CVE{'s' if len(scored) > 1 else ''} ({split})"
-    )
-    for s in scored[:SHOWN]:
+    return f"{len(scored)} {word} CVE{'s' if len(scored) > 1 else ''} ({split})"
+
+
+def _print_cves(svc: Service, scored: list[ScoredCVE]) -> None:
+    sure = [s for s in scored if not s.open_ended]
+    possible = [s for s in scored if s.open_ended]
+    where = f"{escape(svc.host)}:{svc.port} {escape(svc.label)}"
+    if sure:
+        also = f", and {_count(possible, 'possible')}" if possible else ""
+        console.print(f"{_level(worst(sure))} {where}: {_count(sure, 'known')}{also}")
+        _print_each(sure[:SHOWN])
+        if len(sure) > SHOWN:
+            console.print(f"  [dim]...and {len(sure) - SHOWN} more: --json lists them all.[/dim]")
+    else:
+        console.print(f"{where}: no CVE names this version, {_count(possible, 'possible')}")
+    if possible:
+        # With sure CVEs to read first, one possible CVE is enough: the worst.
+        shown = 1 if sure else SHOWN
+        _indented(2, f"[dim]{escape(POSSIBLE)}:[/dim]")
+        _print_each(possible[:shown])
+        if len(possible) > shown:
+            console.print(
+                f"  [dim]...and {len(possible) - shown} more possible: "
+                "--json lists them all.[/dim]"
+            )
+
+
+def _print_each(scored: list[ScoredCVE]) -> None:
+    for s in scored:
         facts = [f"riskier than {s.riskier_than:.1%} of CVEs"]
         if s.cvss is not None:
             facts.append(f"CVSS {s.cvss:.1f}")
@@ -151,8 +186,6 @@ def _print_cves(svc: Service, scored: list[ScoredCVE]) -> None:
         else:
             fix = "NVD lists no fixed release: check the vendor's advisories"
         _indented(4, f"Fix: {escape(fix)}")
-    if len(scored) > SHOWN:
-        console.print(f"  [dim]...and {len(scored) - SHOWN} more: --json lists them all.[/dim]")
 
 
 def _report(services: list[Service], as_json: bool, db_path: Path | None = None) -> None:
@@ -161,7 +194,9 @@ def _report(services: list[Service], as_json: bool, db_path: Path | None = None)
         data = [s.to_dict() for s in services]
         for item, scored in zip(data, risks or [None] * len(data), strict=True):
             item["risk"] = None if scored is None else {
-                "level": worst(scored), "cves": [asdict(s) for s in scored],
+                "level": worst(scored),
+                "possible_level": worst(scored, possible=True),
+                "cves": [asdict(s) for s in scored],
             }
         print(json.dumps(data, indent=2))
         return
@@ -521,32 +556,131 @@ def _print_trained(settings: dict, cves: int, exploited: int, started: float, ou
     console.print(f"Saved to {escape(str(out))}", soft_wrap=True)
 
 
-def _print_test(result: train.TestResult) -> None:
-    console.print(
-        f"Standing on {result.cutoff.isoformat()}: {result.judged:,} CVEs were public and not "
-        f"yet on CISA's list. CISA listed {result.listed} of them in the following year.\n"
-        "How many of those would you have caught by fixing the top of each ranking:"
-    )
-    table = Table()
-    for heading in ("Ranking", "Top 1%", "Top 5%", "Top 10%", "Average precision"):
+_TOPS = ("top 1%", "top 5%", "top 10%")
+_HEADINGS = ("Top 1%", "Top 5%", "Top 10%")
+
+
+def _settings_words(settings: dict) -> str:
+    options = ", ".join(f"{key}={value}" for key, value in settings.items() if key != "kind")
+    return f"{_MODEL_NAMES[settings['kind']]} ({options})"
+
+
+def _print_judged(judged: Judged, pooled: bool = False, note: str = "") -> None:
+    """One table of rankings with 95% intervals, then our model against EPSS.
+
+    Each interval goes under its number, so the table still fits 80 columns.
+    """
+    table = Table(show_lines=True)
+    headings = ("Ranking", *_HEADINGS) if pooled else ("Ranking", *_HEADINGS, "Average precision")
+    for heading in headings:
         table.add_column(heading, justify="left" if heading == "Ranking" else "right")
-    for name, measures in result.rows:
-        table.add_row(
-            name,
-            *(f"{measures[key]:.1%}" for key in ("top 1%", "top 5%", "top 10%")),
-            f"{measures['average precision']:.4f}",
-        )
+    for name, measures in judged.rows:
+        ranges = judged.intervals[name]
+        cells = [
+            f"{measures[key]:.1%}\n({ranges[key][0] * 100:.0f} to {ranges[key][1] * 100:.0f})"
+            for key in _TOPS
+        ]
+        if not pooled:
+            low, high = ranges["average precision"]
+            # Four decimals, as CVSS's is under 0.001, and no leading 0 so the row fits.
+            ends = " to ".join(f"{end:.4f}".removeprefix("0") for end in (low, high))
+            cells.append(f"{measures['average precision']:.4f}\n({ends})")
+        # EPSS as it was on the test day: today's EPSS already knows what happened next.
+        table.add_row("EPSS that day" if name == EPSS else name, *cells)
     console.print(table)
-    console.print(
-        f"Random guessing catches about 1%, 5% and 10%, with an average precision of "
-        f"{result.listed / result.judged:.4f}."
+    if note:
+        console.print(note)
+    if not judged.against_epss:
+        return
+    gaps = [judged.against_epss[key] for key in _TOPS]
+    table = Table(title="Our model against EPSS, on the same listed CVEs", title_justify="left")
+    for heading in ("", *_HEADINGS):
+        table.add_column(heading, justify="right" if heading else "left")
+    table.add_row(
+        "Ours minus EPSS, in points",
+        *(f"{g.difference * 100:+.1f}\n({g.low * 100:+.0f} to {g.high * 100:+.0f})" for g in gaps),
     )
+    table.add_row(
+        "Only ours caught / only EPSS", *(f"{g.only_first} / {g.only_second}" for g in gaps)
+    )
+    table.add_row(
+        "Sign test p-value",
+        *("under 0.001" if g.p_value < 0.001 else f"{g.p_value:.3f}" for g in gaps),
+    )
+    console.print(table)
+    ahead = [h for h, g in zip(_HEADINGS, gaps, strict=True) if g.beyond_chance]
+    behind = [
+        h for h, g in zip(_HEADINGS, gaps, strict=True) if g.high < 0 and g.p_value < 0.05
+    ]
+    console.print(
+        "Ahead of EPSS beyond chance (interval above 0 and p under 0.05): "
+        f"{', '.join(ahead).lower() or 'nowhere'}."
+        + (f" Behind it: {', '.join(behind).lower()}." if behind else "")
+    )
+
+
+def _print_test(result: train.TestResult) -> None:
+    day = result.cutoff.isoformat()
+    all_of_it = result.everything
+    how = "chosen on the year before" if result.tuned else "the built-in settings"
+    console.print(
+        f"Standing on {day}: {all_of_it.judged:,} CVEs were public and not "
+        f"yet on CISA's list. CISA listed {all_of_it.listed} of them in the following year.\n"
+        f"Model: {_settings_words(result.settings)}, {how}.\n"
+        "How many of those would you have caught by fixing the top of each ranking "
+        "(95% interval in brackets):"
+    )
+    _print_judged(
+        all_of_it,
+        note="Random guessing catches about 1%, 5% and 10%, with an average precision of "
+        f"{all_of_it.listed / all_of_it.judged:.4f}.",
+    )
+    strict = result.without_those
+    if result.said_exploited and strict:
+        console.print(
+            f"\nGiveaway check: {result.said_exploited} of the {all_of_it.listed} listed CVEs "
+            "have a description that says they were exploited, which may have been written "
+            f"after the attack. Without any CVE that says so ({strict.listed} listed left):"
+        )
+        _print_judged(strict)
+    elif result.said_exploited:
+        console.print(
+            f"\nGiveaway check: all {result.said_exploited} listed CVEs have a description "
+            "that says they were exploited, so nothing is left to judge without them."
+        )
+    else:
+        console.print(
+            "\nGiveaway check: no listed CVE's description says it was exploited."
+        )
     if result.epss_missing:
-        day = result.cutoff.isoformat()
         err.print(
             f"[yellow]No EPSS scores saved for {day}, so EPSS isn't compared. Run "
             f"`dingdongditch update-db --epss-date {day}` to add them.[/yellow]"
         )
+
+
+def _print_pooled(results: list[train.TestResult]) -> None:
+    both = train.pooled(results)
+    if both is None:
+        err.print(
+            "[yellow]The test years overlap, so they aren't added up: a CVE would count "
+            "twice. Use days at least a year apart.[/yellow]"
+        )
+        return
+    everything, strict = both
+    console.print(
+        f"\nAll {len(results)} test days together: {everything.listed} listed CVEs, each "
+        "judged in its own year."
+    )
+    _print_judged(everything, pooled=True)
+    if EPSS not in everything.caught:
+        err.print("[yellow]EPSS is left out: not every test day has its scores saved.[/yellow]")
+    if strict and strict.listed < everything.listed:
+        console.print(
+            f"\nThe same without any CVE whose description says it was exploited "
+            f"({strict.listed} listed left):"
+        )
+        _print_judged(strict, pooled=True)
 
 
 @app.command("train")
@@ -564,10 +698,17 @@ def train_command(
         help="Use XGBoost instead of logistic regression: about 15 minutes instead of 2, "
         "and about as good.",
     ),
-    test_date: str = typer.Option(
-        None, "--test", metavar="YYYY-MM-DD",
+    test_dates: list[str] = typer.Option(
+        [], "--test", metavar="YYYY-MM-DD",
         help="Don't save a model: train on what was known that day, and compare it with "
-        "CVSS and EPSS on the year after.",
+        "CVSS and EPSS on the year after, with 95% intervals. Give it more than once, "
+        "a year or more apart, to also add the test years up.",
+    ),
+    tune: bool = typer.Option(
+        False, "--tune",
+        help="With --test: choose the model's settings again for each test day, on the "
+        "year before it, instead of using the built-in ones. With --xgboost, XGBoost "
+        "is tried as well. Much slower.",
     ),
 ) -> None:
     """Train the model that ranks CVEs by how likely they are to be exploited."""
@@ -575,11 +716,13 @@ def train_command(
         err.print(f"[red]{escape(str(train.MissingXGBoost()))}[/red]")
         raise typer.Exit(1)
     try:
-        cutoff = date.fromisoformat(test_date) if test_date else None
+        cutoffs = sorted({date.fromisoformat(text) for text in test_dates})
     except ValueError as exc:
         raise typer.BadParameter(
             f"{exc}. Use YYYY-MM-DD, e.g. 2025-05-01.", param_hint="--test"
         ) from exc
+    if tune and not cutoffs:
+        raise typer.BadParameter("--tune only works with --test.", param_hint="--tune")
     path = db_path or db.default_path()
     if not path.exists():
         err.print(f"[red]No database at {path}.[/red] Run `dingdongditch update-db` first.")
@@ -596,10 +739,25 @@ def train_command(
         if not con.execute("SELECT 1 FROM cve LIMIT 1").fetchone():
             err.print("[red]The database has no CVEs yet.[/red] Run `dingdongditch update-db`.")
             raise typer.Exit(1)
-        if cutoff:
-            with err.status(f"Training on what was known on {cutoff.isoformat()}..."):
-                result = train.time_travel_test(con, cutoff, settings, date.today())
-            _print_test(result)
+        if cutoffs:
+            grid = train.LOGISTIC + (train.XGBOOST if use_xgboost else []) if tune else None
+            results = []
+            for cutoff in cutoffs:
+                doing = "Choosing settings, then training" if tune else "Training"
+                with err.status(f"{doing} on what was known on {cutoff.isoformat()}..."):
+                    result = train.time_travel_test(con, cutoff, settings, date.today(), grid)
+                if results:
+                    console.print()
+                _print_test(result)
+                if tune and not result.tuned:
+                    err.print(
+                        "[yellow]CISA's list was too young a year before "
+                        f"{cutoff.isoformat()} to choose settings on, so the built-in ones "
+                        "were used.[/yellow]"
+                    )
+                results.append(result)
+            if len(results) > 1:
+                _print_pooled(results)
             return
         out = model_path or path.with_name(train.MODEL_FILE)
         with err.status("Training on every CVE known today..."):

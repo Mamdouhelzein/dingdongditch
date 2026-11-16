@@ -58,6 +58,58 @@ def test_time_travel_test_prints_the_comparison(database):
     assert not database.with_name(train.MODEL_FILE).exists()  # a test saves nothing
 
 
+def test_test_shows_intervals_and_the_giveaway_check(database):
+    result = run("--db", str(database), "--test", "2025-05-01")
+    out = " ".join(result.output.split())
+    assert "Model: a logistic regression (C=0.3, class_weight=None), the built-in settings" in out
+    assert "(95% interval in brackets)" in out
+    assert "(100 to 100)" in out  # the made-up model catches every listed CVE in its top 5%
+    assert "Giveaway check: no listed CVE's description says it was exploited" in out
+    assert "against EPSS" not in out  # no EPSS saved for that day
+    assert "test days together" not in out
+
+
+def test_several_test_days_are_added_up(database):
+    con = db.connect(database)
+    with con:
+        con.executemany(
+            "INSERT INTO epss_history VALUES (?, ?, 0.5, 0.5)",
+            [(day, f"CVE-{n}") for day in ("2024-05-01", "2025-05-01") for n in range(400)],
+        )
+    con.close()
+    result = run("--db", str(database), "--test", "2025-05-01", "--test", "2024-05-01")
+    assert result.exit_code == 0, result.output
+    out = " ".join(result.output.split())
+    assert out.index("Standing on 2024-05-01") < out.index("Standing on 2025-05-01")
+    assert out.count("│ EPSS that day │") == 3  # each day, and both together
+    assert "All 2 test days together:" in out
+    assert out.count("Our model against EPSS, on the same listed CVEs") == 3
+    assert "Ahead of EPSS beyond chance" in out
+    assert not database.with_name(train.MODEL_FILE).exists()
+
+
+def test_overlapping_test_years_are_not_added_up(database):
+    result = run("--db", str(database), "--test", "2025-05-01", "--test", "2025-01-01")
+    assert result.exit_code == 0, result.output
+    assert "test days together" not in result.output
+    assert "overlap" in result.output
+
+
+def test_tune_chooses_settings_for_each_test_day(database):
+    result = run("--db", str(database), "--test", "2025-05-01", "--test", "2024-05-01", "--tune")
+    assert result.exit_code == 0, result.output
+    out = " ".join(result.output.split())
+    assert "chosen on the year before" in out  # 2025: a year earlier the list has entries
+    assert "too young a year before 2024-05-01" in out  # 2024: it doesn't
+
+
+def test_tune_needs_a_test_day(database):
+    result = run("--db", str(database), "--tune")
+    assert result.exit_code == 2
+    assert "--tune only works with --test" in " ".join(result.output.split())
+    assert not database.with_name(train.MODEL_FILE).exists()
+
+
 def test_test_year_must_be_over(database):
     result = run("--db", str(database), "--test", "2026-10-01")
     assert result.exit_code == 1

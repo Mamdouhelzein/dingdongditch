@@ -17,13 +17,10 @@ venv/
 .vscode/
 .idea/
 
-# Data & models (large; regenerate with `dingdongditch update-db` / training scripts)
-data/raw/*
-data/processed/*
-!data/**/.gitkeep
-models/*.joblib
-models/*.json
-!models/.gitkeep
+# The database and model live in your user data folder, not here. In case one lands
+# in the repository anyway:
+*.db
+*.joblib
 
 # Never commit real scan results of other people's networks
 scans/

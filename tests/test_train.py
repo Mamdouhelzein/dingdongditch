@@ -115,3 +115,81 @@ def test_xgboost_is_only_needed_for_xgboost(monkeypatch):
     train._classifier(train.DEFAULT)  # logistic regression still works
     with pytest.raises(train.MissingXGBoost, match=r"dingdongditch\[xgboost\]"):
         train._classifier(train.XGBOOST_BEST)
+
+
+class FakeCon:
+    """time_travel_test only hands its connection on to load() and epss_scores()."""
+
+
+@pytest.fixture
+def world(monkeypatch):
+    monkeypatch.setattr(train, "load", lambda con, cutoff: make_frame())
+    monkeypatch.setattr(
+        train, "epss_scores",
+        lambda con, frame, day: np.random.default_rng(1).random(len(frame)),
+    )
+
+
+def test_time_travel_test_judges_every_ranking_with_intervals(world):
+    result = train.time_travel_test(FakeCon(), CUTOFF, train.DEFAULT, date(2026, 11, 1))
+    judged = result.everything
+    assert [name for name, _ in judged.rows] == ["CVSS", "Public exploit", "EPSS", "Our model"]
+    assert judged.listed == int(evaluate.make_test_set(make_frame(), CUTOFF).listed.sum())
+    assert dict(judged.rows)["Our model"]["top 10%"] == 1.0
+    assert judged.intervals["Our model"]["top 10%"] == (1.0, 1.0)
+    assert set(judged.against_epss) == {"top 1%", "top 5%", "top 10%"}
+    assert (result.settings, result.tuned, result.epss_missing) == (train.DEFAULT, False, False)
+    # No description in this world says "exploited", so the check changes nothing.
+    assert result.said_exploited == 0
+    assert result.without_those.listed == judged.listed
+
+
+def test_tuning_chooses_on_the_year_before_only(world, monkeypatch):
+    seen = []
+    real = train.choose_settings
+
+    def spy(frame, cutoff, grid, **more):
+        seen.append((cutoff, grid))
+        return real(frame, cutoff, grid, min_count=1)
+
+    monkeypatch.setattr(train, "choose_settings", spy)
+    result = train.time_travel_test(
+        FakeCon(), CUTOFF, train.DEFAULT, date(2026, 11, 1), tune=train.LOGISTIC
+    )
+    assert seen == [(YEAR_EARLIER, train.LOGISTIC)]
+    assert result.tuned and result.settings in train.LOGISTIC
+
+
+def test_tuning_falls_back_when_the_list_is_too_young(world):
+    # A year before 2024-05-01 nothing in this world was on CISA's list yet.
+    result = train.time_travel_test(
+        FakeCon(), YEAR_EARLIER, train.DEFAULT, date(2026, 11, 1), tune=train.LOGISTIC
+    )
+    assert (result.tuned, result.settings) == (False, train.DEFAULT)
+
+
+def test_giveaway_check_drops_cves_that_say_they_were_exploited(monkeypatch):
+    frame = make_frame()
+    later = frame["kev_added"] == "2025-09-01"
+    first = frame.index[later][0]
+    frame.loc[first, "description"] += ", exploited in the wild"
+    monkeypatch.setattr(train, "load", lambda con, cutoff: frame)
+    monkeypatch.setattr(
+        train, "epss_scores", lambda con, frame, day: np.zeros(len(frame))
+    )
+    result = train.time_travel_test(FakeCon(), CUTOFF, train.DEFAULT, date(2026, 11, 1))
+    assert result.said_exploited == 1
+    assert result.without_those.listed == result.everything.listed - 1
+    assert result.without_those.judged == result.everything.judged - 1
+
+
+def test_test_days_are_only_added_up_when_their_years_dont_overlap(world):
+    today = date(2026, 11, 1)
+    first = train.time_travel_test(FakeCon(), YEAR_EARLIER, train.DEFAULT, today)
+    second = train.time_travel_test(FakeCon(), CUTOFF, train.DEFAULT, today)
+    everything, strict = train.pooled([second, first])
+    assert everything.listed == first.everything.listed + second.everything.listed
+    assert strict.listed == everything.listed
+    assert train.pooled([first]) is None
+    close = train.time_travel_test(FakeCon(), date(2025, 1, 1), train.DEFAULT, today)
+    assert train.pooled([close, second]) is None  # January and May 2025 share months
